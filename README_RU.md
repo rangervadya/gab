@@ -1,0 +1,75 @@
+# Локальный OCR-сервис для ГАБ Инвест
+
+Сервис принимает PDF внутри Docker-сети, локально распознаёт русский/английский текст и пытается восстановить таблицы. Исходный PDF не отправляется во внешние API и удаляется из временной папки после обработки.
+
+## 1. Установка в существующий проект
+
+Распакуйте папку `gab_ocr_service` рядом с вашим `docker-compose.yml`, чтобы путь был `~/ai-stack/gab_ocr_service/`.
+
+Сделайте резервную копию compose:
+
+```bash
+cd ~/ai-stack
+cp docker-compose.yml docker-compose.yml.backup-$(date +%F-%H%M%S)
+```
+
+Добавьте содержимое `compose-snippet.yml` внутрь секции `services:` в `docker-compose.yml` (на одном уровне с `postgres_ai`, `n8n_ai`, `ollama_ai`). Отступы YAML важны.
+
+Добавьте в существующий `.env` новую строку. Сгенерируйте значение командой `openssl rand -hex 32` и подставьте его вместо `ВСТАВЬТЕ_СЛУЧАЙНЫЙ_КЛЮЧ`:
+
+```dotenv
+OCR_API_TOKEN=ВСТАВЬТЕ_СЛУЧАЙНЫЙ_КЛЮЧ
+```
+
+Не отправляйте этот ключ в чат и не публикуйте его.
+
+## 2. Сборка и запуск только нового сервиса
+
+```bash
+cd ~/ai-stack
+docker compose config -q
+docker compose build gab_ocr
+docker compose up -d gab_ocr
+docker compose ps gab_ocr
+```
+
+Эти команды не пересоздают n8n, Ollama или PostgreSQL: они собирают и запускают только `gab_ocr`.
+
+## 3. Проверка здоровья
+
+```bash
+docker compose exec n8n_ai node -e 'fetch("http://gab_ocr:8000/health").then(r=>r.json()).then(console.log).catch(console.error)'
+```
+
+В ответе ожидаются `status: ok`, версия Tesseract и языки `rus` и `eng`.
+
+## 4. Как вызвать распознавание
+
+В n8n создайте HTTP Request:
+
+- Method: `POST`
+- URL: `http://gab_ocr:8000/extract`
+- Send Body: `Form-Data`
+- поле формы: `file`, тип `n8n Binary File`, Input Data Field Name — имя бинарного поля, обычно `data`
+- Header: `X-API-Key` со значением `OCR_API_TOKEN`
+- Response: JSON
+- Timeout: 600000 ms
+
+OCR-сервис доступен только по внутренней Docker-сети `ai_net`: опубликованного порта `8000` нет.
+
+## 5. Что возвращает API
+
+- `pages`: страницы документа
+- `raw_text`: текст страницы (встроенный текст PDF или локальный Tesseract OCR)
+- `tables`: найденные таблицы, каждая в виде массива `rows`
+- `tables_count`: количество таблиц
+
+Табличное распознавание основано на img2table + Tesseract. Результат зависит от качества скана и линий таблицы; обязательно проверить строки на тестовом документе прежде чем автоматически отправлять данные в CRM.
+
+## 6. Безопасность
+
+- Не добавляйте `ports: 8000:8000`.
+- Не добавляйте `OCR_API_TOKEN` в репозиторий или в сообщения.
+- Не передавайте сам PDF в DaData, Checko или внешнюю AI-модель.
+- Для внешнего поиска передавайте только минимальные сведения о компании, когда это разрешено внутренними правилами и применимым законодательством.
+- Ограничение загрузки по умолчанию — 100 MB.

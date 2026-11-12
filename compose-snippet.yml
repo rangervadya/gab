@@ -1,0 +1,11 @@
+  gab_ocr:
+    build: ./gab_ocr_service
+    restart: unless-stopped
+    expose:
+      - "8000"
+    environment:
+      - OCR_API_TOKEN=${OCR_API_TOKEN}
+      - MAX_FILE_MB=100
+      - OMP_NUM_THREADS=1
+    networks:
+      - ai_net
