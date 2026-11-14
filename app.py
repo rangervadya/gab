@@ -17,7 +17,7 @@ from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from pytesseract import Output
 
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.4.3"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))
@@ -200,9 +200,14 @@ def words_to_cells(words: list[dict[str, Any]], x_edges: list[int], y_edges: lis
         if not text:
             continue
         x_center = (float(word["x0"]) + float(word["x1"])) / 2
-        y_center = (float(word["y0"]) + float(word["y1"])) / 2
+        # Text-layer bounding boxes can extend across a horizontal table rule.
+        # Using the geometric centre then pushes bottom-aligned values into the
+        # next row (for example the 444,6 sqm value in the Nurlat row on page 4).
+        # Anchor row membership near the upper part of the glyph while retaining
+        # the centre for horizontal column assignment.
+        y_anchor = float(word["y0"]) + 0.35 * (float(word["y1"]) - float(word["y0"]))
         column = cell_index(x_center, x_edges)
-        row = cell_index(y_center, y_edges)
+        row = cell_index(y_anchor, y_edges)
         if column is None or row is None:
             continue
         buckets.setdefault((row, column), []).append(word)
