@@ -17,7 +17,7 @@ from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from pytesseract import Output
 
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.3"
+APP_VERSION = "0.4.4"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))
