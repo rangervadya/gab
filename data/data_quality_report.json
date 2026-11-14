@@ -1,0 +1,76 @@
+{
+  "workbook": "GAB_Review_Register_2026-11-14.xlsx",
+  "sheet": "Реестр",
+  "total_records": 140,
+  "unique_record_ids": 140,
+  "records_requiring_review": 66,
+  "records_without_review": 74,
+  "records_with_additional_review_note": 6,
+  "area_status_counts": {
+    "parsed": 133,
+    "empty": 3,
+    "ambiguous": 3,
+    "unrecognized": 1
+  },
+  "lease_term_status_counts": {
+    "MANUAL_REVIEW": 10,
+    "VALID_DURATION": 130
+  },
+  "additional_review_notes": [
+    {
+      "record_id": "P1-R9",
+      "internal_name": "Руфино",
+      "note": "Проверить исходную дату начала аренды: 0 5 . 0 2 1 5."
+    },
+    {
+      "record_id": "P1-R19",
+      "internal_name": "Елховский",
+      "note": "Проверить расхождение: начало аренды 2010, окончание 2028, срок договора 7 лет. Возможное продление."
+    },
+    {
+      "record_id": "P2-R14",
+      "internal_name": "ервопроходец",
+      "note": "Проверить правильное написание названия объекта. OCR распознал: ервопроходец."
+    },
+    {
+      "record_id": "P5-R9",
+      "internal_name": "Шлем",
+      "note": "Проверить площадь 3279 кв. м по PDF. Возможно, потерян десятичный разделитель."
+    },
+    {
+      "record_id": "P7-R12",
+      "internal_name": "Древесный",
+      "note": "Проверить расхождение: начало аренды 2012, окончание 2022, срок договора 5 лет. Возможное продление."
+    },
+    {
+      "record_id": "P8-R2",
+      "internal_name": "Королевство",
+      "note": "Полная ручная проверка страницы 8. Все поля распознаны ненадёжно."
+    }
+  ],
+  "warning_counts": {
+    "lease_term_needs_manual_review": 10,
+    "additional_manual_review": 6,
+    "address_contains_multiple_postcodes_check_row_alignment": 16,
+    "first_row_touches_scan_edge_manual_review": 2,
+    "area_missing": 3,
+    "lease_end_month_missing": 3,
+    "lease_end_month_value_needs_review": 2,
+    "lease_end_year_missing": 7,
+    "area_components_require_manual_review": 3,
+    "lease_start_date_missing": 4,
+    "registration_date_normalization_failed": 14,
+    "registration_date_missing": 17,
+    "lease_start_date_normalization_failed": 4,
+    "lease_end_year_normalization_failed": 4,
+    "area_normalization_failed": 3,
+    "address_postcode_length_unusual_manual_review": 2,
+    "format_missing": 4,
+    "format_value_needs_review": 3,
+    "internal_name_needs_review": 1,
+    "counterparty_contacts_missing": 1,
+    "rotated_page_manual_review": 2,
+    "lease_end_month_normalization_failed": 1
+  },
+  "note": "Counts are record-level, not unique-company counts."
+}
