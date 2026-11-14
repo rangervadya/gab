@@ -17,7 +17,7 @@ from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from pytesseract import Output
 
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))
@@ -57,9 +57,59 @@ def render_gray(page: fitz.Page, scale: float) -> np.ndarray:
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
 
 
+def perspective_rectify_page7(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+    """Rectify the photographed trapezoidal table on page 7, preserving a word transform."""
+    height, width = gray.shape
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 41, 10
+    )
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return gray, None
+
+    contour = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(contour) < height * width * 0.45:
+        return gray, None
+
+    perimeter = cv2.arcLength(contour, True)
+    approx = cv2.approxPolyDP(contour, 0.01 * perimeter, True)
+    if len(approx) != 4:
+        return gray, None
+
+    points = approx.reshape(-1, 2).astype(np.float32)
+    sums = points.sum(axis=1)
+    diffs = np.diff(points, axis=1).ravel()  # y - x
+    top_left = points[int(np.argmin(sums))]
+    bottom_right = points[int(np.argmax(sums))]
+    top_right = points[int(np.argmin(diffs))]
+    bottom_left = points[int(np.argmax(diffs))]
+
+    source = np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
+    top_width = float(np.linalg.norm(top_right - top_left))
+    bottom_width = float(np.linalg.norm(bottom_right - bottom_left))
+    left_height = float(np.linalg.norm(bottom_left - top_left))
+    right_height = float(np.linalg.norm(bottom_right - top_right))
+    out_width = max(100, int(round(max(top_width, bottom_width))))
+    out_height = max(100, int(round(max(left_height, right_height))))
+    target = np.array(
+        [[0, 0], [out_width - 1, 0], [out_width - 1, out_height - 1], [0, out_height - 1]],
+        dtype=np.float32,
+    )
+    transform = cv2.getPerspectiveTransform(source, target)
+    rectified = cv2.warpPerspective(
+        gray, transform, (out_width, out_height), flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    return rectified, transform
+
+
 def deskew(gray: np.ndarray, page_number: int) -> tuple[np.ndarray, np.ndarray | None, float]:
     if page_number == 8:
         return gray, None, 0.0
+    if page_number == 7:
+        rectified, transform = perspective_rectify_page7(gray)
+        if transform is not None:
+            return rectified, transform, 0.0
     height, width = gray.shape
     edges = cv2.Canny(gray, 50, 150)
     lines = cv2.HoughLinesP(edges, 1, np.pi / 1800, threshold=100,
@@ -139,10 +189,12 @@ def cell_index(value: float, edges: list[int]) -> int | None:
 
 
 def words_to_cells(words: list[dict[str, Any]], x_edges: list[int], y_edges: list[int]) -> tuple[list[list[str]], list[list[float]]]:
+    """Assign words to table cells and preserve OCR/PDF line reading order."""
     rows = len(y_edges) - 1
     cells: list[list[str]] = [["" for _ in range(10)] for _ in range(rows)]
     confs: list[list[float]] = [[] for _ in range(rows)]
-    buckets: dict[tuple[int, int], list[tuple[float, float, str, float]]] = {}
+    buckets: dict[tuple[int, int], list[dict[str, Any]]] = {}
+
     for word in words:
         text = str(word.get("text", "")).strip()
         if not text:
@@ -153,12 +205,43 @@ def words_to_cells(words: list[dict[str, Any]], x_edges: list[int], y_edges: lis
         row = cell_index(y_center, y_edges)
         if column is None or row is None:
             continue
-        buckets.setdefault((row, column), []).append((y_center, float(word["x0"]), text, float(word.get("confidence", 100))))
+        buckets.setdefault((row, column), []).append(word)
+
     for (row, column), tokens in buckets.items():
-        tokens.sort(key=lambda item: (item[0], item[1]))
-        # Preserve word order; line breaks are normalized to spaces to avoid splitting one field.
-        cells[row][column] = " ".join(item[2] for item in tokens)
-        confs[row].extend(item[3] for item in tokens)
+        if all(all(key in token for key in ("block_order", "line_order", "word_order")) for token in tokens):
+            # PDF text layer and Tesseract both expose their own word/line sequence.
+            # Use it rather than sorting by tiny differences in bounding-box Y values.
+            tokens.sort(key=lambda token: (
+                int(token.get("block_order", 0)),
+                int(token.get("paragraph_order", 0)),
+                int(token.get("line_order", 0)),
+                int(token.get("word_order", 0)),
+            ))
+        else:
+            # Fallback: cluster nearby word centres into baselines, then read each
+            # baseline from left to right. A 4 px tolerance handles font-height drift.
+            ordered = sorted(tokens, key=lambda token: (
+                (float(token["y0"]) + float(token["y1"])) / 2, float(token["x0"])
+            ))
+            lines: list[list[dict[str, Any]]] = []
+            for token in ordered:
+                cy = (float(token["y0"]) + float(token["y1"])) / 2
+                if not lines:
+                    lines.append([token])
+                    continue
+                line_y = float(np.mean([
+                    (float(item["y0"]) + float(item["y1"])) / 2 for item in lines[-1]
+                ]))
+                if abs(cy - line_y) <= 4.0:
+                    lines[-1].append(token)
+                else:
+                    lines.append([token])
+            tokens = []
+            for line in lines:
+                tokens.extend(sorted(line, key=lambda token: float(token["x0"])))
+
+        cells[row][column] = " ".join(str(token["text"]).strip() for token in tokens)
+        confs[row].extend(float(token.get("confidence", 100)) for token in tokens)
     return cells, confs
 
 
@@ -169,10 +252,21 @@ def native_words(page: fitz.Page, scale: float, affine: np.ndarray | None) -> li
         x0, y0, x1, y1 = float(x0) * scale, float(y0) * scale, float(x1) * scale, float(y1) * scale
         if affine is not None:
             pts = np.array([[[x0, y0], [x1, y0], [x0, y1], [x1, y1]]], dtype=np.float32)
-            transformed = cv2.transform(pts, affine)[0]
+            if affine.shape == (3, 3):
+                transformed = cv2.perspectiveTransform(pts, affine)[0]
+            else:
+                transformed = cv2.transform(pts, affine)[0]
             x0, y0 = float(np.min(transformed[:, 0])), float(np.min(transformed[:, 1]))
             x1, y1 = float(np.max(transformed[:, 0])), float(np.max(transformed[:, 1]))
-        out.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "text": str(text), "confidence": 100.0})
+        block_order = int(word[5]) if len(word) > 5 else 0
+        line_order = int(word[6]) if len(word) > 6 else 0
+        word_order = int(word[7]) if len(word) > 7 else 0
+        out.append({
+            "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+            "text": str(text), "confidence": 100.0,
+            "block_order": block_order, "paragraph_order": 0,
+            "line_order": line_order, "word_order": word_order,
+        })
     return out
 
 
@@ -192,8 +286,14 @@ def tesseract_words(gray: np.ndarray, lang: str = "rus+eng", psm: int = 6) -> li
             continue
         left, top = int(data["left"][i]), int(data["top"][i])
         width, height = int(data["width"][i]), int(data["height"][i])
-        out.append({"x0": left, "y0": top, "x1": left + width, "y1": top + height,
-                    "text": text, "confidence": conf})
+        out.append({
+            "x0": left, "y0": top, "x1": left + width, "y1": top + height,
+            "text": text, "confidence": conf,
+            "block_order": int(data["block_num"][i]),
+            "paragraph_order": int(data["par_num"][i]),
+            "line_order": int(data["line_num"][i]),
+            "word_order": int(data["word_num"][i]),
+        })
     return out
 
 
@@ -220,6 +320,13 @@ def row_result(index: int, band: tuple[int, int], cells: list[str], confs: list[
     for col, warning in warning_by_column.items():
         if not cells[col]:
             warnings.append(warning)
+    # Multiple postcodes in one address cell usually mean that two adjacent
+    # table rows were merged by the geometry detector.
+    postcodes = re.findall(r"(?<!\d)\d{5,7}(?!\d)", cells[2])
+    if len(postcodes) > 1:
+        warnings.append("address_contains_multiple_postcodes_check_row_alignment")
+    if any(len(code) != 6 for code in postcodes):
+        warnings.append("address_postcode_length_unusual_manual_review")
     confidence = round(float(np.mean(confs)), 1) if confs else None
     if confidence is not None and confidence < 45:
         warnings.append("low_ocr_confidence_manual_review")
@@ -387,8 +494,15 @@ def extract_landscape_page(page: fitz.Page, page_number: int, scale: float) -> t
             # mark the page for review instead of silently shifting rows.
             source += "_first_column_alignment_review"
     rows = [row_result(i, band, cells[i], confs[i], source) for i, band in enumerate(row_bands)]
+    # The first data row on the page-2 scan touches the physical top edge.
+    # Its postal-code line is visibly clipped in the source image; flag it rather
+    # than silently treating a partial OCR value as a complete address.
+    if page_number in (2, 5) and row_bands and row_bands[0][0] <= 1:
+        rows[0]["warnings"].append("first_row_touches_scan_edge_manual_review")
     return rows, {
-        "orientation": "landscape", "deskew_angle": round(angle, 3),
+        "orientation": "landscape",
+        "perspective_rectified": bool(affine is not None and affine.shape == (3, 3)),
+        "deskew_angle": round(angle, 3),
         "row_edges_px": y_edges, "column_edges_px": x_edges,
         "detected_horizontal_rules": len(y_lines), "first_column_source": source,
         "expected_rows_for_layout": EXPECTED_ROWS.get(page_number),
