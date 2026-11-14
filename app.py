@@ -17,7 +17,7 @@ from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from pytesseract import Output
 
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))
@@ -455,6 +455,49 @@ def ocr_first_cell(crop: np.ndarray) -> tuple[str, float]:
 
 
 
+def ocr_schema_cell(crop: np.ndarray, column: int) -> str:
+    """Recover a missed short schema cell with a vocabulary-constrained OCR pass."""
+    if crop.size == 0:
+        return ""
+
+    enlarged = cv2.resize(crop, None, fx=4.0, fy=4.0, interpolation=cv2.INTER_CUBIC)
+    binary = cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+    if column == 1:
+        whitelist = "ММMмm"
+        raw = pytesseract.image_to_string(
+            binary, lang="rus+eng",
+            config=f"--oem 1 --psm 7 -c tessedit_char_whitelist={whitelist}",
+            timeout=12,
+        )
+        token = re.sub(r"[^А-Яа-яЁёA-Za-z]", "", raw).lower()
+        return "ММ" if token in {"мм", "mm"} else ""
+
+    if column == 5:
+        whitelist = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+        raw = pytesseract.image_to_string(
+            binary, lang="rus",
+            config=f"--oem 1 --psm 7 -c tessedit_char_whitelist={whitelist}",
+            timeout=12,
+        )
+        token = re.sub(r"[^А-Яа-яЁё]", "", raw).lower()
+        months = {
+            "январь", "февраль", "март", "апрель", "май", "июнь",
+            "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+        }
+        return token if token in months else ""
+
+    return ""
+
+
+def normalized_month(value: str) -> str:
+    return re.sub(r"[^А-Яа-яЁё]", "", str(value)).lower()
+
+
+def normalized_format(value: str) -> str:
+    return re.sub(r"[^А-Яа-яЁёA-Za-z]", "", str(value)).lower()
+
+
 def extract_landscape_page(page: fitz.Page, page_number: int, scale: float) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     gray = render_gray(page, scale)
     gray, affine, angle = deskew(gray, page_number)
@@ -480,6 +523,31 @@ def extract_landscape_page(page: fitz.Page, page_number: int, scale: float) -> t
                 cells[row_index][0] = label
                 if label_confidence:
                     confs[row_index].append(label_confidence)
+    cell_fallbacks: list[list[str]] = [[] for _ in row_bands]
+    if len(embedded) < 20:
+        # Full-page PSM 6 can miss small isolated text in narrow cells. Re-read only
+        # the format and Russian end-month cells; accept only known field values.
+        valid_months = {
+            "январь", "февраль", "март", "апрель", "май", "июнь",
+            "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+        }
+        for row_index, (top, bottom) in enumerate(row_bands):
+            for column in (1, 5):
+                current = cells[row_index][column]
+                token = normalized_format(current) if column == 1 else normalized_month(current)
+                valid = token in ({"мм", "mm"} if column == 1 else valid_months)
+                if valid:
+                    cells[row_index][column] = "ММ" if column == 1 else token
+                    continue
+                left = x_edges[column] + 3
+                right = x_edges[column + 1] - 3
+                cell_crop = gray[top + 3:bottom - 3, left:right]
+                recovered = ocr_schema_cell(cell_crop, column)
+                if recovered:
+                    cells[row_index][column] = recovered
+                    confs[row_index].append(75.0)
+                    cell_fallbacks[row_index].append(FIELD_NAMES[column])
+
     # On pages with an embedded text layer, preserve the first-column names as a
     # sequential list. Baseline grouping is more reliable than mapping those names
     # through the slightly inconsistent OCR-overlay coordinates.
@@ -494,6 +562,17 @@ def extract_landscape_page(page: fitz.Page, page_number: int, scale: float) -> t
             # mark the page for review instead of silently shifting rows.
             source += "_first_column_alignment_review"
     rows = [row_result(i, band, cells[i], confs[i], source) for i, band in enumerate(row_bands)]
+    for row_index, row in enumerate(rows):
+        row["cell_ocr_fallbacks"] = cell_fallbacks[row_index]
+        if len(embedded) < 20:
+            if normalized_format(cells[row_index][1]) not in {"мм", "mm"}:
+                row["warnings"].append("format_value_needs_review")
+            if normalized_month(cells[row_index][5]) not in {
+                "январь", "февраль", "март", "апрель", "май", "июнь",
+                "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+            }:
+                row["warnings"].append("lease_end_month_value_needs_review")
+    fallback_count = sum(len(items) for items in cell_fallbacks)
     # The first data row on the page-2 scan touches the physical top edge.
     # Its postal-code line is visibly clipped in the source image; flag it rather
     # than silently treating a partial OCR value as a complete address.
@@ -509,6 +588,7 @@ def extract_landscape_page(page: fitz.Page, page_number: int, scale: float) -> t
         "row_count_matches_reference": (len(rows) == EXPECTED_ROWS.get(page_number)) if page_number in EXPECTED_ROWS else None,
         "coordinate_rows": len(rows),
         "embedded_text_available": len(embedded) >= 20,
+        "focused_cell_ocr_fallbacks": fallback_count,
     }
 
 
