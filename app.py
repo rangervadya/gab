@@ -390,6 +390,14 @@ def extract_page8(page: fitz.Page, scale: float) -> tuple[list[dict[str, Any]], 
         cells[row_index][0] = label
         if label_confidence:
             confs[row_index].append(label_confidence)
+        if not cells[row_index][7]:
+            term_left = x_edges[7] + 3
+            term_right = x_edges[8] - 3
+            term_crop = crop[top:bottom, term_left:term_right]
+            recovered_term = ocr_schema_cell(term_crop, 7)
+            if recovered_term:
+                cells[row_index][7] = recovered_term
+                confs[row_index].append(75.0)
     rows = [row_result(i, (y_edges[i], y_edges[i + 1]), cells[i], confs[i], "rotated_page_coordinate_ocr") for i in range(2)]
     for row in rows:
         row["warnings"].append("rotated_page_manual_review")
@@ -492,6 +500,30 @@ def ocr_schema_cell(crop: np.ndarray, column: int) -> str:
         }
         return token if token in months else ""
 
+    if column == 7:
+        # Recover only blank lease-term cells, accepting known duration formats
+        # and explicit date-like values printed in this column.
+        whitelist = "0123456789ЛЕТГОДМЕСлятгодмес.ДОдо/-"
+        candidates: list[str] = []
+        for psm in (7, 11):
+            try:
+                raw = pytesseract.image_to_string(
+                    binary, lang="rus+eng",
+                    config=f"--oem 1 --psm {psm} -c tessedit_char_whitelist={whitelist}",
+                    timeout=12,
+                )
+            except Exception:
+                continue
+            token = " ".join(str(raw).split())
+            token = re.sub(r"^[^0-9А-Яа-яЁё]+|[^0-9А-Яа-яЁё]+$", "", token).strip()
+            normalized = token.lower().replace("ё", "е")
+            duration_match = re.fullmatch(r"(\d{1,2})\s*(лет|года|год|мес|месяц|месяца|месяцев)", normalized)
+            if duration_match:
+                candidates.append(f"{duration_match.group(1)} {duration_match.group(2)}")
+            elif re.fullmatch(r"(?:до\s*)?\d{1,2}[./-]\d{1,2}[./-]\d{2,4}", normalized):
+                candidates.append(token)
+        return max(candidates, key=lambda value: len(re.sub(r"\s+", "", value))) if candidates else ""
+
     return ""
 
 
@@ -552,6 +584,20 @@ def extract_landscape_page(page: fitz.Page, page_number: int, scale: float) -> t
                     cells[row_index][column] = recovered
                     confs[row_index].append(75.0)
                     cell_fallbacks[row_index].append(FIELD_NAMES[column])
+
+    # Recover blank lease-term cells with a focused OCR pass, even when the page
+    # has a selectable text layer. Full-page extraction can miss short phrases.
+    for row_index, (top, bottom) in enumerate(row_bands):
+        if cells[row_index][7]:
+            continue
+        left = x_edges[7] + 3
+        right = x_edges[8] - 3
+        term_crop = gray[top + 3:bottom - 3, left:right]
+        recovered_term = ocr_schema_cell(term_crop, 7)
+        if recovered_term:
+            cells[row_index][7] = recovered_term
+            confs[row_index].append(75.0)
+            cell_fallbacks[row_index].append(FIELD_NAMES[7])
 
     # On pages with an embedded text layer, preserve the first-column names as a
     # sequential list. Baseline grouping is more reliable than mapping those names
