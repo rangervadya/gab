@@ -8,6 +8,11 @@ import psycopg
 from psycopg.rows import dict_row
 from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from app.crm_api import router as crm_router
+from app.lead_intake import router as lead_intake_router
+from app.notifications_api import router as notifications_router
+from app.mailings_api import router as mailings_router
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -18,6 +23,7 @@ APP_USER = os.environ.get("GAB_APP_USER", "")
 APP_PASSWORD = os.environ.get("GAB_APP_PASSWORD", "")
 
 app = FastAPI(title="GAB Review Center", docs_url=None, redoc_url=None)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -63,6 +69,16 @@ class ReviewUpdate(BaseModel):
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+@app.get("/registry")
+def registry():
+    return FileResponse(STATIC_DIR / "registry.html")
+
+
+@app.get("/mailings")
+def mailings_page():
+    return FileResponse(STATIC_DIR / "mailings.html")
+
 
 @app.get("/api/health")
 def health():
@@ -161,3 +177,8 @@ def update_record(record_id: str, body: ReviewUpdate):
         if not row:
             raise HTTPException(status_code=404, detail="Record not found")
     return {"saved": True, "record_id": record_id}
+
+app.include_router(notifications_router)
+app.include_router(mailings_router)
+app.include_router(crm_router)
+app.include_router(lead_intake_router)

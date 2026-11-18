@@ -221,3 +221,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# GAB SERVER BACKUPS
+*.bak
+*.bak.*
+*.before
+*.before-*
+*.before_*

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>GAB Invest — Проверка реестра</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="logo">G</div><div><strong>GAB INVEST</strong><small>Центр проверки реестра</small></div></div>
+    <div class="top-right"><span class="live-dot"></span> Внутренняя панель</div>
+  </header>
+  <main class="shell">
+    <section class="intro">
+      <div><p class="eyebrow">КОНТРОЛЬ ДАННЫХ</p><h1>Очередь проверки</h1><p class="sub">Проверяйте распознанные объекты, фиксируйте исправления и отмечайте результат.</p></div>
+      <button class="refresh" id="refreshBtn">Обновить</button>
+    </section>
+    <section class="stats">
+      <article class="stat"><span>Всего записей</span><strong id="totalCount">—</strong></article>
+      <article class="stat warn"><span>Ожидают проверки</span><strong id="pendingCount">—</strong></article>
+      <article class="stat"><span>Проверено</span><strong id="reviewedCount">—</strong></article>
+      <article class="stat"><span>Без обязательной проверки</span><strong id="noReviewCount">—</strong></article>
+    </section>
+    <section class="workspace">
+      <div class="list-panel">
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Поиск по объекту, компании, адресу или ID">
+          <select id="scope">
+            <option value="pending">Ожидают проверки</option>
+            <option value="all">Все записи</option>
+            <option value="reviewed">Уже проверены</option>
+            <option value="not_required">Без обязательной проверки</option>
+          </select>
+        </div>
+        <div class="list-head"><span id="listTitle">Ожидают проверки</span><span id="listCount">—</span></div>
+        <div id="records" class="records"><div class="empty">Загрузка данных…</div></div>
+        <div class="pager"><button id="prevBtn">Назад</button><span id="pageInfo">Страница 1</span><button id="nextBtn">Далее</button></div>
+      </div>
+      <aside class="detail-panel" id="detailPanel">
+        <div class="detail-placeholder"><div class="placeholder-icon">✓</div><h2>Выберите запись</h2><p>Здесь появятся исходные данные, причина проверки и поля для исправления.</p></div>
+      </aside>
+    </section>
+    <footer>GAB Review Center · Внутренний инструмент. Данные не отправляются третьим лицам.</footer>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

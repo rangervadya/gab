@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>GAB Invest — Рассылки</title>
+  <link rel="stylesheet" href="/static/crm.css">
+  <link rel="stylesheet" href="/static/mailings.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">G</div>
+    <div>
+      <strong>GAB INVEST</strong>
+      <small>Центр управления рассылками</small>
+    </div>
+  </div>
+  <a class="mail-nav-link" href="/">← Вернуться в CRM</a>
+</header>
+
+<main class="mail-shell">
+  <div class="mail-heading">
+    <div>
+      <p class="eyebrow">GAB INVEST / COMMUNICATION</p>
+      <h1>Рассылки</h1>
+      <p class="subtitle">Подготовка писем, вложения и выбор получателей</p>
+    </div>
+    <button id="newMailing" class="button primary">+ Новая рассылка</button>
+  </div>
+
+  <div class="mail-layout">
+    <aside class="panel campaign-sidebar">
+      <h2>Мои рассылки</h2>
+      <div id="campaignList" class="campaign-list">Загрузка...</div>
+    </aside>
+
+    <section class="mail-workspace">
+      <div id="emptyState" class="panel empty-state">
+        <h2>Создайте первую рассылку</h2>
+        <p>Сохраните письмо как черновик, добавьте документы и выберите получателей из CRM.</p>
+        <button class="button primary" id="emptyNewMailing">Создать черновик</button>
+      </div>
+
+      <div id="editor" hidden>
+        <section class="panel editor-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">РЕДАКТОР ПИСЬМА</p>
+              <h2 id="editorTitle">Новая рассылка</h2>
+            </div>
+            <span class="draft-label">Черновик</span>
+          </div>
+
+          <label class="field-label" for="mailingName">Название рассылки</label>
+          <input id="mailingName" class="mail-input" maxlength="200"
+                 placeholder="Например: Инвестиционное предложение — ноябрь">
+
+          <label class="field-label" for="mailingSubject">Тема письма</label>
+          <input id="mailingSubject" class="mail-input" maxlength="300"
+                 placeholder="Тема, которую увидит получатель">
+
+          <label class="field-label" for="mailingHtml">Текст письма (HTML)</label>
+          <textarea id="mailingHtml" class="mail-textarea"
+                    rows="9" placeholder="<p>Здравствуйте, {{contact_name}}!</p>
+<p>Предлагаем рассмотреть...</p>"></textarea>
+          <p class="hint">Можно использовать HTML. Переменные персонализации подключим на следующем этапе.</p>
+
+          <label class="field-label" for="mailingText">Текстовая версия письма</label>
+          <textarea id="mailingText" class="mail-textarea"
+                    rows="4" placeholder="Обычный текст письма для почтовых клиентов"></textarea>
+
+          <div class="action-row">
+            <button id="saveMailing" class="button primary">Сохранить черновик</button>
+            <button id="previewMailing" class="button secondary">Предпросмотр</button>
+          </div>
+          <p id="saveMessage" class="hint" role="status"></p>
+        </section>
+
+        <section class="panel attachments-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">ФАЙЛЫ</p>
+              <h2>Вложения к письму</h2>
+            </div>
+            <span class="count-label" id="attachmentCount">0 файлов</span>
+          </div>
+          <p class="hint">Выбирайте только те документы, которые должны получить адресаты. До 20 МБ на файл.</p>
+          <label class="upload-control">
+            <input id="attachmentInput" type="file" multiple
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.webp">
+            <span>+ Добавить PDF, Word, Excel или изображение</span>
+          </label>
+          <div id="attachmentList" class="attachment-list">Вложений пока нет</div>
+        </section>
+
+        <section class="panel recipient-folders-panel" id="recipientFolderHome">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">АДРЕСНЫЕ БАЗЫ</p>
+              <h2>Проекты и папки контактов</h2>
+            </div>
+          </div>
+
+          <div id="folderProjectsView">
+            <button class="recipient-folder-card" data-folder-action="open-project">
+              <span class="recipient-folder-icon">📁</span>
+              <span class="recipient-folder-info">
+                <strong>GAB Invest</strong>
+                <small>Базы компаний, контрагентов и инвесторов проекта</small>
+              </span>
+              <span class="recipient-folder-arrow">›</span>
+            </button>
+            <p class="hint">
+              Здесь будут отображаться другие проекты с отдельными адресными базами.
+              Контакты разных проектов не смешиваются.
+            </p>
+          </div>
+
+          <div id="folderGabView" hidden>
+            <button class="folder-back-button" data-folder-action="back-projects">
+              ← Все проекты
+            </button>
+
+            <div class="folder-current-project">
+              <span class="recipient-folder-icon">📁</span>
+              <strong>GAB Invest</strong>
+            </div>
+
+            <button class="recipient-folder-card" data-folder-action="open-source"
+                    data-source="registry">
+              <span class="recipient-folder-icon">📂</span>
+              <span class="recipient-folder-info">
+                <strong>Реестр аренды</strong>
+                <small>Контрагенты, телефоны и договоры из исходного реестра</small>
+              </span>
+              <span class="recipient-folder-arrow">›</span>
+            </button>
+
+            <button class="recipient-folder-card" data-folder-action="open-source"
+                    data-source="crm">
+              <span class="recipient-folder-icon">📂</span>
+              <span class="recipient-folder-info">
+                <strong>Инвесторы CRM</strong>
+                <small>Уже заведённые инвесторы и контактные лица</small>
+              </span>
+              <span class="recipient-folder-arrow">›</span>
+            </button>
+
+            <div class="recipient-folder-card folder-coming-soon">
+              <span class="recipient-folder-icon">📂</span>
+              <span class="recipient-folder-info">
+                <strong>Целевые компании от 100 млн ₽</strong>
+                <small>Отдельная база — подключим следующим этапом</small>
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel recipients-panel" id="crmRecipientsPanel" hidden>
+          <div class="folder-path">
+            <button type="button" class="folder-back-button" id="backFromCrmRecipients">
+              ← GAB Invest
+            </button>
+            <span>GAB Invest / Инвесторы CRM</span>
+          </div>
+
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">АДРЕСНАЯ БАЗА</p>
+              <h2>Получатели</h2>
+            </div>
+            <span class="count-label" id="recipientCount">0 выбрано</span>
+          </div>
+
+          <div class="recipient-toolbar">
+            <input id="recipientSearch" class="mail-input"
+                   placeholder="Поиск по инвестору, компании, ИНН или email">
+            <button id="searchRecipients" class="button secondary">Найти</button>
+          </div>
+
+          <div class="recipient-legend">
+            <span><i class="email-found"></i> Email найден</span>
+            <span><i class="email-missing"></i> Email не найден</span>
+          </div>
+
+          <div id="recipientList" class="recipient-list">
+            Сначала сохраните черновик
+          </div>
+
+          <div class="action-row">
+            <button id="saveRecipients" class="button primary">Сохранить получателей</button>
+            <span id="recipientSummary" class="hint"></span>
+          </div>
+        </section>
+
+        <section class="panel recipients-panel registry-recipients-panel" id="registryRecipientsPanel" hidden>
+          <div class="folder-path">
+            <button type="button" class="folder-back-button" id="backFromRegistryRecipients">
+              ← GAB Invest
+            </button>
+            <span>GAB Invest / Реестр аренды</span>
+          </div>
+
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">ПАПКА ПРОЕКТА GAB INVEST</p>
+              <h2>Контрагенты реестра аренды</h2>
+            </div>
+            <span class="count-label" id="registryRecipientCount">0 выбрано</span>
+          </div>
+
+          <div class="registry-subfolder">
+            <strong>📁 Реестр аренды — контрагенты</strong>
+            <p class="hint">
+              Объекты показаны по названиям из реестра аренды.
+              Инвесторы CRM находятся отдельно в папке «Инвесторы CRM».
+              Связь объекта с компанией ещё не подтверждает сторону договора.
+            </p>
+          </div>
+
+          <div class="recipient-toolbar">
+            <input id="registryRecipientSearch" class="mail-input"
+                   placeholder="Поиск по контрагенту, объекту или ID">
+            <button id="searchRegistryRecipients" class="button secondary">
+              Найти
+            </button>
+          </div>
+
+          <div class="registry-bulk-actions">
+            <button id="selectAllRegistryRecipients" class="button secondary">
+              Выбрать все уникальные
+            </button>
+            <button id="clearRegistryRecipients" class="button secondary">
+              Снять выбор
+            </button>
+          </div>
+
+          <div id="registryRecipientList" class="recipient-list">
+            Загрузка проверенного реестра...
+          </div>
+
+          <div class="registry-enrichment-actions">
+            <button id="enrichSelectedRegistry" class="button primary">
+              Найти ИНН у выбранных
+            </button>
+            <span id="enrichmentStatus" class="hint"></span>
+          </div>
+
+          <div id="registryEnrichmentResults" class="registry-enrichment-results"></div>
+
+          <div class="action-row">
+            <button id="saveRegistryRecipients" class="button primary">
+              Сохранить выбранные записи
+            </button>
+            <span id="registryRecipientSummary" class="hint"></span>
+          </div>
+        </section>
+
+        <section class="panel preview-panel" id="previewPanel" hidden>
+          <div class="panel-heading">
+            <h2>Предпросмотр письма</h2>
+            <button id="closePreview" class="button secondary">Закрыть</button>
+          </div>
+          <iframe id="previewFrame" sandbox="" title="Предпросмотр письма"></iframe>
+        </section>
+
+
+        <section class="panel test-send-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">ПРОВЕРКА ПОЧТЫ</p>
+              <h2>Тестовая отправка</h2>
+            </div>
+            <span class="draft-label">Только один адрес</span>
+          </div>
+          <label class="field-label" for="testRecipientEmail">
+            Твой второй почтовый адрес
+          </label>
+          <input id="testRecipientEmail" class="mail-input"
+                 type="email" maxlength="254"
+                 placeholder="Введи свой второй email">
+          <p class="hint">
+            Письмо уйдёт только на этот адрес. Получатели из CRM
+            для тестовой отправки не используются.
+          </p>
+          <div class="action-row">
+            <button id="sendTestMail" class="button primary">
+              Отправить тестовое письмо
+            </button>
+            <span id="testSendMessage" class="hint" role="status"></span>
+          </div>
+        </section>
+
+        <section class="send-notice">
+          <strong>Массовая отправка пока отключена.</strong>
+          <p>Тестовая отправка доступна только на адрес, введённый выше. Массовая отправка будет отдельно разрешена после успешной проверки письма и вложений.</p>
+        </section>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div id="mailToast" class="mail-toast" role="status"></div>
+<script src="/static/mailings.js"></script>
+</body>
+</html>
