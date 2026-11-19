@@ -180,6 +180,73 @@ class DocumentTests(unittest.TestCase):
         self.assertEqual(model_pages,[1,2,3,4,5,6,7,7,8])
         self.assertEqual(len(saved),8)
 
+    def test_token_limit_retry_has_own_cache_key_and_reuses_old_pages(self):
+        from unittest.mock import patch,MagicMock
+        import json,hashlib
+        request={'model':'synthetic','stream':False,'options':{'num_predict':6000},'messages':[]}
+        payload={'batch_id':1,'worker_token':'a'*32,'source_page':7,'pages_total':8,'ollama_request':request}
+        saved={};calls=[]
+        def cache(page,key,result=None):
+            if result is not None:saved[key]=result
+            return saved.get(key)
+        def model(req,**kwargs):
+            body=json.loads(req.data);calls.append(body)
+            self.assertLessEqual(kwargs['timeout'],1800)
+            result={'done':True,'done_reason':'length','eval_count':6000,'message':{'content':'{"records":['}} if len(calls)==1 else {'done':True,'done_reason':'stop','message':{'content':'{"records":[]}'}}
+            response=MagicMock();response.__enter__.return_value=response
+            response.read.return_value=json.dumps(result).encode()
+            return response
+        with patch('progress.Reporter.report'),patch('progress.Reporter.page_result',side_effect=cache),patch('urllib.request.urlopen',side_effect=model):
+            for _ in range(2):
+                response=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+                self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual([c['options']['num_predict'] for c in calls],[6000,12000])
+        expected=hashlib.sha256(json.dumps(calls[1],ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        self.assertEqual(list(saved),[expected])
+        # An existing successful 6000-token response remains valid: no model call.
+        old=hashlib.sha256(json.dumps(request,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        saved={old:{'done':True,'message':{'content':'{"records":[]}'}}}
+        with patch('progress.Reporter.report'),patch('progress.Reporter.page_result',side_effect=cache),patch('urllib.request.urlopen') as opener:
+            response=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+            self.assertEqual(response.status_code,200,response.text)
+            opener.assert_not_called()
+
+    def test_bad_json_diagnostics_and_bounded_retry(self):
+        from unittest.mock import patch,MagicMock
+        import json
+        payload={'batch_id':1,'worker_token':'a'*32,'source_page':7,'pages_total':8,
+                 'ollama_request':{'model':'synthetic','stream':False,'options':{'num_predict':6000}}}
+        for reason,expected_calls in [('stop',1),('length',2)]:
+            response=MagicMock();response.__enter__.return_value=response
+            response.read.return_value=json.dumps({'done':True,'done_reason':reason,'eval_count':6000,'message':{'content':'{"records":[PRIVATE'}}).encode()
+            with patch('progress.Reporter.report'),patch('progress.Reporter.page_result',return_value=None),patch('urllib.request.urlopen',return_value=response) as opener:
+                actual=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+                self.assertEqual(actual.status_code,502,actual.text)
+                self.assertEqual(opener.call_count,expected_calls)
+                self.assertIn('done_reason='+reason,actual.json()['detail'])
+                self.assertIn('tokens=6000',actual.json()['detail'])
+                self.assertNotIn('PRIVATE',actual.text)
+
+    def test_limit_retry_obeys_deadline_and_cancellation(self):
+        from unittest.mock import patch,MagicMock
+        from types import SimpleNamespace
+        from fastapi import HTTPException
+        import json
+        payload={'batch_id':1,'worker_token':'a'*32,'source_page':7,'pages_total':8,
+                 'ollama_request':{'model':'synthetic','stream':False,'options':{'num_predict':6000}}}
+        response=MagicMock();response.__enter__.return_value=response
+        response.read.return_value=json.dumps({'done':True,'done_reason':'length','message':{'content':'broken'}}).encode()
+        endpoint=next(r.endpoint for r in self.client.app.routes if r.path=='/ollama/chat')
+        clock=SimpleNamespace(monotonic=MagicMock(side_effect=[0,0,1801]))
+        with patch.dict(endpoint.__globals__,{'time':clock}),patch('progress.Reporter.report'),patch('progress.Reporter.page_result',return_value=None),patch('urllib.request.urlopen',return_value=response) as opener:
+            actual=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+            self.assertEqual(actual.status_code,504,actual.text)
+            self.assertEqual(opener.call_count,1)
+        with patch('progress.Reporter.report',side_effect=[None,None,HTTPException(409,'cancelled')]),patch('progress.Reporter.page_result',return_value=None),patch('urllib.request.urlopen',return_value=response) as opener:
+            actual=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+            self.assertEqual(actual.status_code,409,actual.text)
+            self.assertEqual(opener.call_count,1)
+
     @unittest.skipUnless(shutil.which('tesseract'), 'Tesseract rus+eng is required for real OCR tests')
     def test_image_and_scanned_pdf(self):
         from PIL import Image, ImageDraw

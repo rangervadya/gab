@@ -27,7 +27,7 @@ from pytesseract import Output
 OLLAMA_LOCK = threading.Lock()
 
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.6"
+APP_VERSION = "0.4.7"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))
@@ -1141,22 +1141,53 @@ def tracked_ollama_chat(body: dict, x_api_key: str | None = Header(default=None,
     if len(raw)>2*1024*1024:raise HTTPException(413,'Запрос страницы слишком большой')
     reporter=Reporter(batch_id,token)
     reporter.report('llm',total,require_active=True)
-    request_hash=hashlib.sha256(json.dumps(request_body,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    # Keep both exact fingerprints: old completed pages remain reusable, while
+    # an expanded generation is stored under its own actual request hash.
+    def fingerprint(request):
+        return hashlib.sha256(json.dumps(request,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    candidates=[request_body]
+    options=request_body.get('options',{})
+    if not isinstance(options,dict):raise HTTPException(422,'options должна быть объектом')
+    limit=options.get('num_predict')
+    if type(limit) is int and 0<limit<12000:
+        candidates.append({**request_body,'options':{**options,'num_predict':min(12000,limit*2)}})
     if not OLLAMA_LOCK.acquire(blocking=False):
         raise HTTPException(429,'Ollama занята другим документом. Повторите обработку позже; сохранённые страницы останутся.')
     try:
-        result=reporter.page_result(page,request_hash)
+        result=None
+        for candidate in candidates:
+            result=reporter.page_result(page,fingerprint(candidate))
+            if result is not None:break
         if result is None:
-            req=urllib.request.Request('http://ollama_ai:11434/api/chat',data=raw,headers={'Content-Type':'application/json'},method='POST')
-            try:
-                with urllib.request.urlopen(req,timeout=1800) as response:
-                    result=json.loads(response.read(5*1024*1024))
-                parsed=json.loads(result['message']['content'])
-                if result.get('done') is not True or result.get('done_reason')=='length' or not isinstance(parsed.get('records'),list):
-                    raise ValueError('incomplete records')
-            except Exception as exc:
-                raise HTTPException(502,f'Страница {page}: Ollama не завершила корректный JSON ({type(exc).__name__}). Успешные страницы сохранены.') from None
-            reporter.page_result(page,request_hash,result)
+            deadline=time.monotonic()+1800
+            for attempt,candidate in enumerate(candidates):
+                reporter.report('llm',total,require_active=True)
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise HTTPException(504,f'Страница {page}: истекло общее время обработки страницы. Успешные страницы сохранены.')
+                req=urllib.request.Request('http://ollama_ai:11434/api/chat',data=json.dumps(candidate,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
+                try:
+                    with urllib.request.urlopen(req,timeout=remaining) as response:
+                        raw_response=response.read(5*1024*1024+1)
+                    if len(raw_response)>5*1024*1024:raise ValueError('response too large')
+                    result=json.loads(raw_response)
+                except Exception as exc:
+                    raise HTTPException(502,f'Страница {page}: ошибка HTTP/внешнего JSON Ollama ({type(exc).__name__}). Успешные страницы сохранены.') from None
+                reason=result.get('done_reason') if isinstance(result,dict) else None
+                count=result.get('eval_count') if isinstance(result,dict) else None
+                try:
+                    content=result['message']['content']
+                    parsed=json.loads(content)
+                    if result.get('done') is not True or reason=='length' or not isinstance(parsed.get('records'),list):
+                        raise ValueError('incomplete records')
+                except (KeyError,TypeError,ValueError,AttributeError) as exc:
+                    # Do not retry malformed JSON or transport errors blindly.
+                    # Only an explicit token-limit finish permits one larger call.
+                    if reason=='length' and attempt+1<len(candidates):continue
+                    safe_reason=reason if reason in ('length','stop','load','unload') else 'unknown'
+                    position=f', JSON position={exc.pos}' if isinstance(exc,json.JSONDecodeError) else ''
+                    raise HTTPException(502,f'Страница {page}: некорректный JSON Ollama ({type(exc).__name__}; done_reason={safe_reason}; tokens={count if type(count) is int else "unknown"}; num_predict={candidate.get("options",{}).get("num_predict","default")}{position}). Успешные страницы сохранены.') from None
+                reporter.page_result(page,fingerprint(candidate),result)
+                break
         reporter.report('llm',total,page,require_active=True)
         return {**result,'_gab_source_page':page,'_gab_last_page':page==total}
     finally:
