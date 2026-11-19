@@ -227,6 +227,8 @@ if kind=='crm':
  assert 'patch' in paths['/api/mailings/imports/{batch_id}/rows/{row_id}']
  assert 'get' in paths['/api/mailings/imports/{batch_id}/rows/{row_id}/match-preview']
  assert 'post' in paths['/api/mailings/imports/{batch_id}/rows/{row_id}/confirm']
+ assert 'post' in paths['/api/mailings/{mailing_id}/bulk-preview']
+ assert 'post' in paths['/api/mailings/{mailing_id}/bulk-send']
 if kind=='ocr':
  assert results['/health']['version']==os.environ['GAB_EXPECTED_OCR_VERSION']
  assert {'rus','eng'} <= set(results['/health']['languages'])

@@ -13,6 +13,7 @@ from app.crm_api import router as crm_router
 from app.lead_intake import router as lead_intake_router
 from app.notifications_api import router as notifications_router
 from app.mailings_api import router as mailings_router
+from app.mailing_bulk import router as bulk_mailings_router
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -180,5 +181,6 @@ def update_record(record_id: str, body: ReviewUpdate):
 
 app.include_router(notifications_router)
 app.include_router(mailings_router)
+app.include_router(bulk_mailings_router)
 app.include_router(crm_router)
 app.include_router(lead_intake_router)

@@ -30,6 +30,10 @@ class ImportApiTests(unittest.TestCase):
         cls.storage = tempfile.TemporaryDirectory()
         os.environ['GAB_IMPORT_STORAGE'] = cls.storage.name
         from app.main import app
+        from app import investor_imports_api
+        from unittest.mock import patch
+        cls.storage_patch=patch.object(investor_imports_api,'STORAGE_DIR',Path(cls.storage.name))
+        cls.storage_patch.start()
         from fastapi.testclient import TestClient
         cls.client = TestClient(app)
         cls.client.auth = ('synthetic-reviewer', 'synthetic-test-password')
@@ -38,6 +42,7 @@ class ImportApiTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.client.close()
         cls.conn.close()
+        cls.storage_patch.stop()
         cls.storage.cleanup()
 
     def test_edit_retry_and_audit(self):

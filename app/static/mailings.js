@@ -99,6 +99,8 @@ async function openMailing(id) {
   const data = await api(`/api/mailings/${id}`);
   const m = data.mailing;
   currentId = id;
+  invalidateBulkPlan();
+  clearTimeout(bulkTimer);
   showRecipientFolders("projects");
   $("mailingName").value = m.name || "";
   $("mailingSubject").value = m.subject || "";
@@ -127,8 +129,10 @@ async function openMailing(id) {
   showEditor(true);
   renderAttachments();
   await loadRecipients();
-  await loadRegistryRecipients();
+  try { await loadRegistryRecipients(); }
+  catch (error) { $("registryRecipientList").textContent = "Реестр недоступен: " + error.message; }
   await loadCampaigns();
+  await refreshBulkStatus();
 }
 
 function renderAttachments() {
@@ -694,6 +698,7 @@ $("attachmentList").addEventListener("click", async event => {
     await api(`/api/mailings/${currentId}/attachments/${button.dataset.deleteAttachment}`, {
       method: "DELETE"
     });
+    invalidateBulkPlan();
     attachmentItems = attachmentItems.filter(
       f => String(f.id) !== button.dataset.deleteAttachment
     );
@@ -752,4 +757,120 @@ $("sendTestMail").addEventListener("click", async () => {
   } finally {
     button.disabled = false;
   }
+});
+
+// Manual bulk dispatch: preview and status reads never initiate mail delivery.
+let bulkPlan = null;
+let bulkTimer = null;
+let campaignLocked = false;
+
+function invalidateBulkPlan() {
+  bulkPlan = null;
+  $("bulkPreview").hidden = true;
+}
+
+function setCampaignLocked(locked) {
+  campaignLocked = locked;
+  for (const id of ["mailingName", "mailingSubject", "mailingHtml", "mailingText", "saveMailing",
+    "attachmentInput", "saveRecipients", "saveRegistryRecipients", "sendTestMail", "bulkPreviewBtn", "selectVisibleCrm", "clearCrmSelection"]) {
+    $(id).disabled = locked;
+  }
+  document.querySelectorAll('[data-delete-attachment], [data-investor], [data-review-record]').forEach(el => { el.disabled = locked; });
+}
+
+async function refreshBulkStatus() {
+  const id = currentId;
+  if (!id) return;
+  clearTimeout(bulkTimer);
+  const result = await api(`/api/mailings/${id}/bulk-status`);
+  if (id !== currentId) return;
+  setCampaignLocked(result.started);
+  if (!result.started) {
+    $("bulkSendStatus").textContent = "Отправка ещё не запускалась";
+    return;
+  }
+  invalidateBulkPlan();
+  const c = result.counts;
+  const states = {pending:"Не отправлялось", sending:"Отправляется", sent:"Принято SMTP", unknown:"Результат не подтверждён — повтор запрещён", excluded:"Исключён"};
+  $("bulkSendStatus").innerHTML = `
+    <h3>${result.status === "completed" ? "Обработка завершена" : result.status === "paused" ? "Отправка остановлена" : "Отправка выполняется / ожидает продолжения"}</h3>
+    <p>Принято SMTP: ${c.sent}; осталось: ${c.pending}; отправляется: ${c.sending}; не подтверждено: ${c.unknown}; исключено: ${c.excluded}.</p>
+    ${result.error ? `<p class="bulk-error">${htmlEscape(result.error)}</p>` : ""}
+    <p class="hint">Принятие SMTP не гарантирует доставку во входящие. Уже отправленные и неподтверждённые письма автоматически не повторяются.</p>
+    ${result.status === "running" ? '<button id="bulkPauseBtn" type="button" class="button secondary">Остановить после текущего письма</button>' : ""}
+    ${(c.pending || c.sending) ? '<button id="bulkResumeBtn" type="button" class="button secondary">Продолжить только неотправленные</button>' : ""}
+    <details><summary>Результат по каждому адресу</summary><div class="bulk-recipient-list">${result.recipients.map(r => `<div>${htmlEscape(r.email)} — ${htmlEscape(states[r.delivery_state] || r.delivery_state)} ${r.error_message ? "· " + htmlEscape(r.error_message) : ""}</div>`).join("")}</div></details>`;
+  const pauseButton = $("bulkPauseBtn");
+  if (pauseButton) pauseButton.addEventListener("click", async () => {
+    pauseButton.disabled = true;
+    try {
+      await api(`/api/mailings/${id}/bulk-pause`, {method:"POST", body:JSON.stringify({confirm:true,run_id:result.run_id})});
+      await refreshBulkStatus();
+    } catch (error) { toast(error.message); pauseButton.disabled = false; }
+  });
+  const resume = $("bulkResumeBtn");
+  if (resume) resume.addEventListener("click", async () => {
+    if (!confirm("Продолжить только адреса, для которых попытка ещё не выполнялась? Уже отправленные и неподтверждённые письма не повторятся.")) return;
+    resume.disabled = true;
+    try {
+      await api(`/api/mailings/${id}/bulk-resume`, {method:"POST", body:JSON.stringify({confirm:true,run_id:result.run_id})});
+      await refreshBulkStatus();
+    } catch (error) { toast(error.message); resume.disabled = false; }
+  });
+  if (result.status === "running" || c.sending) bulkTimer = setTimeout(() => refreshBulkStatus().catch(e => toast(e.message)), 4000);
+}
+
+$("bulkPreviewBtn").addEventListener("click", async () => {
+  const id = currentId;
+  if (!id || campaignLocked) return;
+  const button = $("bulkPreviewBtn");
+  button.disabled = true;
+  try {
+    await saveMailing();
+    await saveRecipients();
+    const plan = await api(`/api/mailings/${id}/bulk-preview`, {method:"POST"});
+    if (id !== currentId) return;
+    bulkPlan = plan;
+    $("bulkPreview").hidden = false;
+    $("bulkPreview").innerHTML = `
+      <h3>Проверка перед отправкой</h3>
+      <p><strong>Тема:</strong> ${htmlEscape(plan.subject)}</p>
+      <iframe class="bulk-message-preview" sandbox="" title="Письмо получателям"></iframe>
+      <p>Вложения: ${plan.attachments.map(a => `${htmlEscape(a.filename)} (${(a.size_bytes/1024/1024).toFixed(2)} МиБ)`).join(", ") || "нет"}.</p>
+      <p><strong>Будет отправлено отдельных писем: ${plan.count}.</strong> Исключено: ${plan.excluded.length}.</p>
+      <details><summary>Получатели (${plan.count})</summary><div class="bulk-recipient-list">${plan.recipients.map(r => `<div>${htmlEscape(r.name)} · ${htmlEscape(r.email)}</div>`).join("")}</div></details>
+      ${plan.excluded.length ? `<details><summary>Исключённые адреса</summary>${plan.excluded.map(r => `<div>${htmlEscape(r.email || "Без email")}: ${htmlEscape(r.reason)}</div>`).join("")}</details>` : ""}
+      <label class="bulk-confirm"><input id="bulkReviewed" type="checkbox">Я проверил текст, вложения и список адресов. Подтверждаю отправку.</label>
+      <button id="bulkSendBtn" type="button" class="button primary" disabled>Отправить ${plan.count} писем</button>`;
+    $("bulkPreview").querySelector("iframe").srcdoc = plan.body_html || `<pre>${htmlEscape(plan.body_text)}</pre>`;
+    $("bulkReviewed").addEventListener("change", event => { $("bulkSendBtn").disabled = !event.target.checked || !plan.can_send; });
+    $("bulkSendBtn").addEventListener("click", async () => {
+      if (!bulkPlan || bulkPlan !== plan || !$("bulkReviewed").checked || id !== currentId) return;
+      $("bulkSendBtn").disabled = true;
+      try {
+        await api(`/api/mailings/${id}/bulk-send`, {method:"POST", body:JSON.stringify({confirm:true,preview_hash:plan.preview_hash})});
+        invalidateBulkPlan();
+        await refreshBulkStatus();
+      } catch (error) { invalidateBulkPlan(); toast(error.message); }
+    });
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = campaignLocked; }
+});
+for (const id of ["mailingName", "mailingSubject", "mailingHtml", "mailingText", "recipientList", "registryRecipientList", "attachmentInput"]) {
+  $(id).addEventListener("input", invalidateBulkPlan);
+  $(id).addEventListener("change", invalidateBulkPlan);
+}
+
+$("selectVisibleCrm").addEventListener("click", () => {
+  if (campaignLocked) return;
+  invalidateBulkPlan();
+  for (const recipient of recipientItems) {
+    const email = String(recipient.email || "").trim();
+    if (email) selectedRecipients.set(recipientSelectionKey(recipient.investor_id, email), {investor_id:Number(recipient.investor_id), email});
+  }
+  renderRecipients();
+});
+$("clearCrmSelection").addEventListener("click", () => {
+  if (campaignLocked) return;
+  invalidateBulkPlan(); selectedRecipients.clear(); renderRecipients();
 });

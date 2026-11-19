@@ -64,7 +64,7 @@
           <textarea id="mailingHtml" class="mail-textarea"
                     rows="9" placeholder="<p>Здравствуйте, {{contact_name}}!</p>
 <p>Предлагаем рассмотреть...</p>"></textarea>
-          <p class="hint">Можно использовать HTML. Переменные персонализации подключим на следующем этапе.</p>
+          <p class="hint">Можно использовать HTML. Переменные вида {{contact_name}} пока не поддерживаются: замените их текстом перед отправкой.</p>
 
           <label class="field-label" for="mailingText">Текстовая версия письма</label>
           <textarea id="mailingText" class="mail-textarea"
@@ -179,6 +179,10 @@
             <button id="searchRecipients" class="button secondary">Найти</button>
           </div>
 
+          <div class="action-row">
+            <button id="selectVisibleCrm" type="button" class="button secondary">Выбрать найденные с email</button>
+            <button id="clearCrmSelection" type="button" class="button secondary">Снять весь выбор CRM</button>
+          </div>
           <div class="recipient-legend">
             <span><i class="email-found"></i> Email найден</span>
             <span><i class="email-missing"></i> Email не найден</span>
@@ -292,9 +296,12 @@
           </div>
         </section>
 
-        <section class="send-notice">
-          <strong>Массовая отправка пока отключена.</strong>
-          <p>Тестовая отправка доступна только на адрес, введённый выше. Массовая отправка будет отдельно разрешена после успешной проверки письма и вложений.</p>
+        <section class="panel bulk-send-panel">
+          <h2>Отправка выбранным получателям</h2>
+          <p class="hint">Сначала сохраните письмо, вложения и получателей. Каждому адресу уйдёт отдельное письмо; остальные адреса получателю не видны.</p>
+          <button id="bulkPreviewBtn" type="button" class="button secondary">Проверить перед отправкой</button>
+          <div id="bulkPreview" hidden></div>
+          <div id="bulkSendStatus" role="status" aria-live="polite"></div>
         </section>
       </div>
     </section>

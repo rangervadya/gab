@@ -202,6 +202,13 @@ class LifecycleTests(unittest.TestCase):
                 self.assertNotIn('migration',d.events)
                 self.assertNotIn('rollback',d.events)
 
+    def test_mailings_deployment_does_not_change_any_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Lifecycle(tmp);d.execute('mailings')
+            self.assertEqual(d.events,['backup','build','migration','crm','other-workflows'])
+            self.assertNotIn('quiesce',d.events)
+            self.assertNotIn('publish',d.events)
+
     def test_backup_component_never_changes_components(self):
         with tempfile.TemporaryDirectory() as tmp:
             d=Lifecycle(tmp);d.execute('backup')
@@ -245,6 +252,32 @@ class PublicationTests(unittest.TestCase):
         d.publication_status=lambda:{'published_version':None,'in_flight':0,'triggers':[]}
         with patch('deploy.time.sleep') as sleep:d.wait_for_publication()
         sleep.assert_not_called()
+
+
+class MailSenderValidationTests(unittest.TestCase):
+    def workflow(self):
+        names=['Webhook','Prepare Mail','Send an Email','Build Success Response','Respond to Webhook']
+        kinds=['webhook','code','emailSend','code','respondToWebhook']
+        nodes=[{'name':n,'type':'n8n-nodes-base.'+t,'parameters':{}} for n,t in zip(names,kinds)]
+        nodes[0].update(parameters={'path':'synthetic','authentication':'headerAuth'},credentials={'httpHeaderAuth':{'id':'header-ref'}})
+        nodes[2].update(parameters={'toEmail':'={{ $json.to_email }}','fromEmail':'sender@example.test','options':{}},credentials={'smtp':{'id':'smtp-ref'}})
+        return {'activeVersionId':'synthetic-version','nodes':nodes,'connections':{a:{'main':[[{'node':b}]]} for a,b in zip(names,names[1:])}}
+
+    def test_existing_sender_contract(self):
+        from mailing_validation import sender_references
+        self.assertEqual(sender_references(self.workflow(),'https://n8n.techsmysl.ru/webhook/synthetic'),('header-ref','smtp-ref'))
+
+    def test_sender_retry_and_extra_destinations_rejected(self):
+        from mailing_validation import sender_references
+        for changes in [{'retryOnFail':True},{'parameters':{'toEmail':'someone@example.test','fromEmail':'sender@example.test'}}]:
+            w=self.workflow();w['nodes'][2].update(changes)
+            with self.assertRaises(ValueError):sender_references(w,'https://n8n.techsmysl.ru/webhook/synthetic')
+
+    def test_credential_log_parser_does_not_require_printing_secrets(self):
+        from mailing_validation import credential_document
+        raw=b'Log message [not json]\n[{"id":"synthetic-ref","data":{"value":"synthetic-token"}}]\nExported'
+        self.assertEqual(credential_document(raw,'synthetic-ref')['id'],'synthetic-ref')
+        with self.assertRaises(ValueError):credential_document(raw,'another-id')
 
 
 if __name__=='__main__':unittest.main()

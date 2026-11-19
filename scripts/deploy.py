@@ -125,6 +125,43 @@ class Deployment:
                 raise DeployError('Running n8n did not apply GAB 02 publication in time')
             time.sleep(3)
 
+    def verify_mail_sender(self):
+        from mailing_validation import credential_document,sender_references
+        env=environment(self.snapshots['crm'])
+        url=env.get('GAB_MAILING_WEBHOOK_URL','')
+        token=env.get('GAB_MAILING_WEBHOOK_TOKEN','')
+        from urllib.parse import urlsplit
+        parsed=urlsplit(url)
+        if parsed.scheme!='https' or parsed.hostname!='n8n.techsmysl.ru' or not token:
+            raise DeployError('Почтовый webhook CRM не настроен')
+        path=parsed.path.removeprefix('/webhook/').strip('/')
+        matches=[w for w in self.all_workflows if any(n.get('type')=='n8n-nodes-base.webhook' and n.get('parameters',{}).get('path','').strip('/')==path for n in w.get('nodes',[]))]
+        if len(matches)!=1:raise DeployError('Не найден единственный почтовый workflow')
+        remote='/tmp/gab-mail-contract-'+uuid.uuid4().hex+'.json';self.remote_files.append(remote)
+        self.n8n('export:workflow','--id='+matches[0]['id'],'--published','--output='+remote)
+        try:
+            published=json.loads(self.runner.run(['docker','exec',self.config['n8n_container'],'cat',remote]))[0]
+        finally:
+            self.runner.run(['docker','exec',self.config['n8n_container'],'rm','-f',remote]);self.remote_files.remove(remote)
+        published['activeVersionId']=matches[0].get('activeVersionId')
+        header_id,smtp_id=sender_references(published,url)
+        # Compare the shared token only in memory, never in files, arguments or
+        # output. SMTP credentials remain encrypted and are not used to log in.
+        header=credential_document(self.n8n('export:credentials','--id='+header_id,'--decrypted'),header_id)
+        data=header['data']
+        if isinstance(data,str):data=json.loads(data)
+        import hmac
+        if data.get('name','').lower()!='x-gab-webhook-token' or not hmac.compare_digest(str(data.get('value','')),token):
+            raise DeployError('Почтовый webhook token CRM не совпадает с Header Auth n8n')
+        smtp=credential_document(self.n8n('export:credentials','--id='+smtp_id),smtp_id)
+        if smtp.get('type')!='smtp':raise DeployError('SMTP credential не найден')
+        log('Почтовый workflow и общий token проверены. SMTP/webhook не вызывались; писем отправлено: 0.')
+
+    def assert_no_mail_dispatch(self):
+        if self.sql("SELECT to_regclass('public.gab_crm_mailing_runs')"):
+            if self.sql("SELECT count(*) FROM gab_crm_mailing_runs WHERE status='running'")!='0':
+                raise DeployError('Есть незавершённая почтовая отправка. Обновление/откат CRM запрещён до её проверки')
+
     def assert_idle(self):
         busy = self.sql('SELECT count(*) FROM execution_entity WHERE "workflowId"=\''+WORKFLOW_ID+
             "' AND status IN ('new','running','waiting')", database=self.n8n_database())
@@ -208,6 +245,7 @@ class Deployment:
             raise DeployError('Database identity check failed')
         self.sql("SELECT 1 FROM gab_crm_import_rows LIMIT 0")
         self.assert_idle()
+        self.assert_no_mail_dispatch()
         self.publication_status()
         self.all_workflows = self.export_workflows()
         matches = [w for w in self.all_workflows if w.get('id') == WORKFLOW_ID]
@@ -217,6 +255,7 @@ class Deployment:
         if len(self.previous.get('nodes',[])) != 27:
             raise DeployError('Live GAB 02 does not have the audited 27 nodes')
         self.before_other = fingerprint(self.all_workflows)
+        if component=='mailings':self.verify_mail_sender()
         # Fail before database/container changes if runtime compatibility is bad.
         health_check(self.runner,self.config,self.config['n8n_container'],'n8n',retries=False)
         if component == 'workflow':
@@ -381,7 +420,8 @@ class Deployment:
 
     def migrate(self):
         log('Applying idempotent import-editor migration…')
-        self.sql(None,data=(ROOT/'migrations/20261119_import_editor.sql').read_bytes())
+        for migration in ('20261119_import_editor.sql','20261119_bulk_mailing.sql'):
+            self.sql(None,data=(ROOT/'migrations'/migration).read_bytes())
         found=self.sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='gab_crm_import_rows' AND column_name IN ('manual_overrides','edit_version')")
         if found!='2':raise DeployError('Editor migration postcondition failed')
         self.state['migration_applied']=True;self.save()
@@ -438,6 +478,7 @@ class Deployment:
 
     def rollback(self):
         errors=[]
+        self.assert_no_mail_dispatch()
         # Stop only GAB 02 before switching back to an older CRM/worker protocol.
         if self.state.get('workflow_touched'):
             try:
@@ -494,9 +535,9 @@ class Deployment:
         self.begin()
         try:
             self.perform('Резервное копирование',self.backup)
-            if component in ('all','crm'):self.perform('Сборка CRM',self.build_crm)
-            if component!='backup':self.perform('Остановка только GAB 02',self.quiesce)
-            if component in ('all','crm'):
+            if component in ('all','crm','mailings'):self.perform('Сборка CRM',self.build_crm)
+            if component not in ('backup','mailings'):self.perform('Остановка только GAB 02',self.quiesce)
+            if component in ('all','crm','mailings'):
                 self.perform('Миграция БД',self.migrate)
                 self.perform('Переключение и проверка CRM',self.update_crm)
             if component in ('all','ocr'):self.perform('Проверка OCR',self.update_ocr)
@@ -547,7 +588,7 @@ def read_recovery(archive, identity):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('component',choices=['all','crm','ocr','workflow','backup','rollback'])
+    parser.add_argument('component',choices=['all','crm','ocr','workflow','mailings','backup','rollback'])
     parser.add_argument('journal',nargs='?')
     parser.add_argument('--check',action='store_true',help='Read-only preflight; never deploy')
     parser.add_argument('--bootstrap-backup',action='store_true',help='Install OS age package if missing; create private recovery key if absent')

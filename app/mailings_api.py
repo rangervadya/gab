@@ -93,14 +93,14 @@ def get_conn():
 
 def check_mailing(conn, mailing_id):
     row = conn.execute(
-        "SELECT * FROM gab_crm_mailings WHERE id = %s",
+        "SELECT * FROM gab_crm_mailings WHERE id = %s FOR UPDATE",
         [mailing_id]
     ).fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail="Mailing not found")
 
-    if row["status"] in ("sending", "sent", "archived"):
+    if row.get("bulk_run_id") or row["status"] in ("sending", "sent", "archived"):
         raise HTTPException(
             status_code=409,
             detail="This mailing is not editable"
@@ -888,7 +888,7 @@ def send_test_email(mailing_id: int, body: TestSendRequest):
             SET status = 'test_sent',
                 test_sent_at = now(),
                 updated_at = now()
-            WHERE id = %s
+            WHERE id = %s AND bulk_run_id IS NULL
             """,
             [mailing_id]
         )
