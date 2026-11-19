@@ -3,46 +3,264 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>GAB Invest — Проверка реестра</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <title>GAB Invest — CRM</title>
+  <link rel="stylesheet" href="/static/crm.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><div class="logo">G</div><div><strong>GAB INVEST</strong><small>Центр проверки реестра</small></div></div>
-    <div class="top-right"><span class="live-dot"></span> Внутренняя панель</div>
-  </header>
-  <main class="shell">
-    <section class="intro">
-      <div><p class="eyebrow">КОНТРОЛЬ ДАННЫХ</p><h1>Очередь проверки</h1><p class="sub">Проверяйте распознанные объекты, фиксируйте исправления и отмечайте результат.</p></div>
-      <button class="refresh" id="refreshBtn">Обновить</button>
-    </section>
-    <section class="stats">
-      <article class="stat"><span>Всего записей</span><strong id="totalCount">—</strong></article>
-      <article class="stat warn"><span>Ожидают проверки</span><strong id="pendingCount">—</strong></article>
-      <article class="stat"><span>Проверено</span><strong id="reviewedCount">—</strong></article>
-      <article class="stat"><span>Без обязательной проверки</span><strong id="noReviewCount">—</strong></article>
-    </section>
-    <section class="workspace">
-      <div class="list-panel">
-        <div class="toolbar">
-          <input id="search" type="search" placeholder="Поиск по объекту, компании, адресу или ID">
-          <select id="scope">
-            <option value="pending">Ожидают проверки</option>
-            <option value="all">Все записи</option>
-            <option value="reviewed">Уже проверены</option>
-            <option value="not_required">Без обязательной проверки</option>
-          </select>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">G</div>
+    <div>
+      <strong>GAB INVEST</strong>
+      <small>Инвестиционная CRM</small>
+    </div>
+  </div>
+  <div class="header-actions">
+    <div class="top-right">
+      <span class="live-dot"></span>
+      Внутренняя система
+    </div>
+
+    <div class="notification-wrap">
+      <button
+        type="button"
+        class="notification-btn"
+        id="notificationBtn"
+        aria-label="Уведомления"
+        aria-expanded="false"
+      >
+        <span class="bell-icon">♢</span>
+        <span id="notificationBadge" class="notification-badge" hidden>0</span>
+      </button>
+
+      <section id="notificationPanel" class="notification-panel" hidden>
+        <div class="notification-head">
+          <strong>Уведомления</strong>
+          <button type="button" id="markAllRead" class="mark-all-btn">
+            Прочитать все
+          </button>
         </div>
-        <div class="list-head"><span id="listTitle">Ожидают проверки</span><span id="listCount">—</span></div>
-        <div id="records" class="records"><div class="empty">Загрузка данных…</div></div>
-        <div class="pager"><button id="prevBtn">Назад</button><span id="pageInfo">Страница 1</span><button id="nextBtn">Далее</button></div>
+        <div id="notificationList" class="notification-list">
+          Загрузка уведомлений...
+        </div>
+      </section>
+    </div>
+  </div>
+</header>
+
+<nav class="nav" id="nav">
+  <button class="nav-btn active" data-view="dashboard">Обзор</button>
+  <button class="nav-btn" data-view="investors">Инвесторы</button>
+  <button class="nav-btn" data-view="companies">Компании</button>
+  <button class="nav-btn" data-view="contacts">Контакты</button>
+  <button class="nav-btn" data-view="assets">Объекты</button>
+  <button class="nav-btn" data-view="interactions">История общения</button>
+  <button class="nav-btn" data-view="tasks">Задачи</button>
+  <button class="nav-btn" data-view="imports">Импорт инвесторов</button>
+  <a class="nav-link" href="/mailings">Рассылки</a>
+  <a class="nav-link" href="/registry">Проверка реестра ↗</a>
+</nav>
+
+<main class="shell">
+  <section id="dashboardView" class="view">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">GAB INVEST / CRM</p>
+        <h1>Обзор системы</h1>
+        <p class="subtitle">Инвесторы, инвестиционные объекты и текущая работа</p>
       </div>
-      <aside class="detail-panel" id="detailPanel">
-        <div class="detail-placeholder"><div class="placeholder-icon">✓</div><h2>Выберите запись</h2><p>Здесь появятся исходные данные, причина проверки и поля для исправления.</p></div>
-      </aside>
-    </section>
-    <footer>GAB Review Center · Внутренний инструмент. Данные не отправляются третьим лицам.</footer>
-  </main>
-  <script src="/static/app.js"></script>
+      <button class="button secondary" id="refreshDashboard">Обновить</button>
+    </div>
+
+    <div class="stats" id="summaryCards">
+      <div class="stat"><span>Инвесторы</span><strong>—</strong></div>
+      <div class="stat"><span>Квалифицированные</span><strong>—</strong></div>
+      <div class="stat"><span>Компании</span><strong>—</strong></div>
+      <div class="stat"><span>Объекты</span><strong>—</strong></div>
+      <div class="stat"><span>Задачи</span><strong>—</strong></div>
+      <div class="stat"><span>Взаимодействия</span><strong>—</strong></div>
+    </div>
+
+    <div class="dashboard-grid">
+      <article class="panel">
+        <h2>Температура инвесторов</h2>
+        <div id="temperatureStats" class="distribution">
+          Данные пока отсутствуют
+        </div>
+      </article>
+      <article class="panel">
+        <h2>Этапы сделок</h2>
+        <div id="stageStats" class="distribution">
+          Данные пока отсутствуют
+        </div>
+      </article>
+    </div>
+
+    <div class="panel info-panel">
+      <h2>Рабочие разделы</h2>
+      <p>Ведите базу инвесторов, фиксируйте интерес к объектам, записывайте звонки и письма, планируйте следующие действия.</p>
+      <p>Проверенный реестр документов доступен отдельно через раздел «Проверка реестра».</p>
+    </div>
+  </section>
+
+  <section id="entityView" class="view" hidden>
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">GAB INVEST / CRM</p>
+        <h1 id="entityTitle">Инвесторы</h1>
+        <p class="subtitle" id="entitySubtitle">Рабочая база CRM</p>
+      </div>
+      <button class="button primary" id="addBtn">+ Добавить</button>
+    </div>
+
+    <div class="panel">
+      <div class="toolbar">
+        <input id="searchInput" type="search" placeholder="Поиск по записям...">
+        <button class="button secondary" id="searchBtn">Найти</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead id="tableHead"></thead>
+          <tbody id="tableBody">
+            <tr><td class="empty">Загрузка...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="pager">
+        <button class="button secondary" id="prevBtn">Назад</button>
+        <span id="pageInfo">Страница 1</span>
+        <button class="button secondary" id="nextBtn">Далее</button>
+      </div>
+    </div>
+  </section>
+
+
+  <section id="importsView" class="view" hidden>
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">GAB INVEST / DATA IMPORT</p>
+        <h1>Импорт инвесторов</h1>
+        <p class="subtitle">Загрузка документов, обработка через n8n и проверка распознанных данных</p>
+      </div>
+      <button class="button secondary" type="button" id="importRefreshBtn">
+        Обновить
+      </button>
+    </div>
+
+    <div class="import-layout">
+      <article class="panel">
+        <h2>Загрузка документов</h2>
+        <p class="import-muted">
+          Загружайте PDF, Excel и Word. Можно выбрать несколько файлов одновременно.
+          Максимальный размер одного файла — 20 МБ.
+        </p>
+
+        <label class="import-dropzone" id="importDropZone">
+          <input
+            id="importFileInput"
+            type="file"
+            multiple
+            accept=".pdf,.xls,.xlsx,.doc,.docx"
+          >
+          <span class="import-upload-icon">↑</span>
+          <strong>Перетащите документы сюда</strong>
+          <span>или нажмите, чтобы выбрать файлы</span>
+          <small>PDF · XLS · XLSX · DOC · DOCX</small>
+        </label>
+
+        <div id="importSelectedFiles" class="import-selected-files">
+          Файлы не выбраны
+        </div>
+
+        <label class="import-field-label" for="importFolderName">
+          Название группы / папки (необязательно)
+        </label>
+        <input
+          id="importFolderName"
+          class="import-text-input"
+          type="text"
+          maxlength="180"
+          placeholder="Например: Реестр инвесторов — ноябрь 2026"
+        >
+
+        <div class="import-actions">
+          <button type="button" class="button primary" id="importUploadBtn" disabled>
+            Загрузить документы
+          </button>
+          <span id="importProgressText" class="import-muted"></span>
+        </div>
+
+        <div class="import-progress" id="importProgress" hidden>
+          <div id="importProgressBar"></div>
+        </div>
+
+        <div id="importUploadResults" class="import-upload-results"></div>
+      </article>
+
+      <article class="panel">
+        <div class="import-panel-head">
+          <div>
+            <h2>История импорта</h2>
+            <p class="import-muted">Все загруженные пакеты документов</p>
+          </div>
+          <span id="importBatchCount" class="import-count">0</span>
+        </div>
+        <div id="importBatchList" class="import-batch-list">
+          Загрузка...
+        </div>
+      </article>
+    </div>
+
+    <article class="panel import-detail-panel" id="importDetailPanel">
+      <div id="importDetailHeader">
+        <h2>Результаты обработки</h2>
+        <p class="import-muted">Выберите документ из истории импорта.</p>
+      </div>
+
+      <div id="importRowsArea"></div>
+    </article>
+
+    <article class="panel" id="importPreviewPanel" hidden>
+      <div class="import-panel-head">
+        <h2>Проверка совпадений</h2>
+        <button type="button" id="importClosePreview" class="button secondary">
+          Закрыть
+        </button>
+      </div>
+      <div id="importPreviewContent"></div>
+    </article>
+
+    <p class="import-safety-note">
+      Загрузка документа не создаёт карточки инвесторов и не запускает рассылку.
+      Результаты требуют проверки и отдельного подтверждения.
+    </p>
+  </section>
+
+  <footer>GAB Invest · Внутренняя CRM-система</footer>
+</main>
+
+<dialog id="recordDialog">
+  <form id="recordForm" method="dialog">
+    <div class="modal-head">
+      <div>
+        <p class="eyebrow">GAB INVEST / CRM</p>
+        <h2 id="formTitle">Новая запись</h2>
+      </div>
+      <button type="button" class="close-btn" id="closeDialog">×</button>
+    </div>
+    <div id="formFields" class="form-fields"></div>
+    <div class="modal-actions">
+      <button type="button" class="button secondary" id="cancelBtn">Отмена</button>
+      <button type="submit" class="button primary" id="saveBtn">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status"></div>
+
+<script src="/static/crm.js?v=20261119fix2"></script>
+<script src="/static/imports.js?v=20261118"></script>
 </body>
 </html>

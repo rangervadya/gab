@@ -1,0 +1,1109 @@
+[
+  {
+    "updatedAt": "2026-11-16T16:33:43.353Z",
+    "createdAt": "2026-11-16T16:33:43.353Z",
+    "id": "GAB02InvImp20261",
+    "name": "GAB 02 — Investor Import",
+    "description": null,
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+      {
+        "id": "GAB2000000000001",
+        "name": "Manual start",
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [
+          200,
+          240
+        ],
+        "parameters": {}
+      },
+      {
+        "id": "GAB2000000000002",
+        "name": "Every minute",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          200,
+          440
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "GAB2000000000003",
+        "name": "List uploaded batches",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          440,
+          320
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "GET",
+          "url": "http://gab-review:8000/api/mailings/imports?status=uploaded&limit=20",
+          "options": {
+            "timeout": 120000
+          }
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        }
+      },
+      {
+        "id": "GAB2000000000004",
+        "name": "Select oldest uploaded batch",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          680,
+          320
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst root = $input.first()?.json || {};\nconst items = Array.isArray(root.items) ? root.items : [];\nconst batch = items.find(x => x.status === \"uploaded\");\n\nif (!batch) return [];\n\nreturn [{\n  json: {\n    batch_id: batch.id,\n    file_extension: String(batch.file_extension || \"\").toLowerCase(),\n    folder_name: batch.folder_name,\n    original_filename: batch.original_filename\n  }\n}];\n"
+        }
+      },
+      {
+        "id": "GAB2000000000005",
+        "name": "Claim batch",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          900,
+          320
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "POST",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $json.batch_id + '/claim' }}",
+          "options": {
+            "timeout": 120000
+          }
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        }
+      },
+      {
+        "id": "GAB2000000000006",
+        "name": "Claim and normalize",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1110,
+          320
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst result = $input.first()?.json || {};\n\nif (result.claimed !== true || !result.item) {\n  return [];\n}\n\nconst b = result.item;\n\nreturn [{\n  json: {\n    batch_id: b.id,\n    file_extension: String(b.file_extension || \"\").toLowerCase(),\n    folder_name: b.folder_name,\n    original_filename: b.original_filename\n  }\n}];\n"
+        }
+      },
+      {
+        "id": "GAB2000000000007",
+        "name": "Is PDF?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1320,
+          320
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "if-pdf-0001",
+                "leftValue": "={{ $json.file_extension }}",
+                "rightValue": "pdf",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "GAB2000000000008",
+        "name": "Download PDF",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          1540,
+          100
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "GET",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $json.batch_id + '/file' }}",
+          "options": {
+            "response": {
+              "response": {
+                "responseFormat": "file",
+                "outputPropertyName": "data"
+              }
+            },
+            "timeout": 120000
+          }
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000009",
+        "name": "OCR PDF",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          1760,
+          100
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "method": "POST",
+          "url": "http://gab_ocr:8000/extract/text",
+          "sendBody": true,
+          "contentType": "multipart-form-data",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "parameterType": "formBinaryData",
+                "name": "file",
+                "inputDataFieldName": "data"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 900000
+          }
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "6Wb6WQE64aBvpr95",
+            "name": "GAB OCR API"
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000010",
+        "name": "Prepare PDF pages",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1980,
+          100
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst root = $input.first()?.json || {};\n\nif (!root.ok || !Array.isArray(root.pages)) {\n  throw new Error(\"OCR не вернул корректный массив pages\");\n}\n\nconst batchId = $(\"Claim and normalize\").first().json.batch_id;\n\nconst schema = {\n  type: \"object\",\n  additionalProperties: false,\n  properties: {\n    records: {\n      type: \"array\",\n      items: {\n        type: \"object\",\n        additionalProperties: false,\n        properties: {\n          company_name: {type: [\"string\", \"null\"]},\n          inn: {type: [\"string\", \"null\"]},\n          city: {type: [\"string\", \"null\"]},\n          full_name: {type: [\"string\", \"null\"]},\n          position: {type: [\"string\", \"null\"]},\n          email: {type: [\"string\", \"null\"]},\n          phone: {type: [\"string\", \"null\"]},\n          emails: {type: \"array\", items: {type: \"string\"}},\n          phones: {type: \"array\", items: {type: \"string\"}},\n          revenue_rub: {type: [\"number\", \"null\"]},\n          revenue_year: {type: [\"integer\", \"null\"]},\n          source_row: {type: [\"integer\", \"null\"]},\n          warnings: {type: \"array\", items: {type: \"string\"}}\n        },\n        required: [\n          \"company_name\", \"inn\", \"city\", \"full_name\", \"position\",\n          \"email\", \"phone\", \"emails\", \"phones\", \"revenue_rub\",\n          \"revenue_year\", \"source_row\", \"warnings\"\n        ]\n      }\n    }\n  },\n  required: [\"records\"]\n};\n\nconst systemPrompt =\n  \"Ты извлекаешь сведения об инвесторах и компаниях из русскоязычных документов. \" +\n  \"Извлеки ВСЕ отдельные компании и контакты, которые явно указаны на странице. \" +\n  \"Не объединяй разные компании. Не выдумывай ИНН, телефоны, email, город или выручку. \" +\n  \"Сохраняй все найденные email и телефоны в массивах. \" +\n  \"ИНН — только 10 или 12 цифр, если он полностью читается. \" +\n  \"Выручку записывай числом в рублях только если сумма и единицы однозначны. \" +\n  \"При неоднозначности оставляй null и добавляй предупреждение. \" +\n  \"Не включай заголовки и рекламные фрагменты. Строго соблюдай JSON Schema.\";\n\nconst result = root.pages.map((p, i) => {\n  const page = {\n    batch_id: batchId,\n    source_page: Number(p.page) || i + 1,\n    page_text: String(p.raw_text || \"\"),\n    needs_review: Boolean(p.needs_review),\n    ocr_error: p.ocr_error || null\n  };\n\n  return {\n    json: {\n      ...page,\n      ollama_request: {\n        model: \"qwen2.5:7b\",\n        stream: false,\n        format: schema,\n        options: {\n          temperature: 0,\n          num_ctx: 16384,\n          num_predict: 6000\n        },\n        messages: [\n          {role: \"system\", content: systemPrompt},\n          {\n            role: \"user\",\n            content:\n              \"Извлеки все записи инвесторов и компаний с этой страницы. \" +\n              \"Не объединяй разные контакты. Сохраняй порядок появления. \" +\n              \"Текст страницы с номером: \" +\n              String(page.source_page) + \"\\n\" + page.page_text\n          }\n        ]\n      }\n    }\n  };\n});\n\nif (!result.length) {\n  throw new Error(\"В PDF нет страниц\");\n}\n\nif (result.every(x => !x.json.page_text.trim())) {\n  throw new Error(\"OCR не извлёк текст ни с одной страницы\");\n}\n\nreturn result;\n"
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000011",
+        "name": "Ollama extract investors",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          2200,
+          100
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "http://ollama_ai:11434/api/chat",
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json.ollama_request) }}",
+          "options": {
+            "timeout": 1800000
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000012",
+        "name": "Parse PDF records",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2420,
+          100
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst outputs = $input.all();\nconst pages = $(\"Prepare PDF pages\").all();\n\nif (outputs.length !== pages.length) {\n  throw new Error(\n    \"Не все страницы обработаны Ollama: \" +\n    outputs.length + \" из \" + pages.length\n  );\n}\n\nfunction normalizeRevenue(value) {\n  if (value === null || value === undefined || value === \"\") {\n    return null;\n  }\n\n  if (typeof value === \"number\" && Number.isFinite(value)) {\n    return value;\n  }\n\n  let s = String(value)\n    .replace(/\\u00a0/g, \" \")\n    .replace(/руб\\.?|₽/gi, \"\")\n    .replace(/\\s/g, \"\")\n    .trim();\n\n  if (s.includes(\",\") && s.includes(\".\")) {\n    if (s.lastIndexOf(\",\") > s.lastIndexOf(\".\")) {\n      s = s.replace(/\\./g, \"\").replace(\",\", \".\");\n    } else {\n      s = s.replace(/,/g, \"\");\n    }\n  } else if (s.includes(\",\")) {\n    const parts = s.split(\",\");\n    s = parts.length === 2 && parts[1].length !== 3\n      ? s.replace(\",\", \".\")\n      : s.replace(/,/g, \"\");\n  }\n\n  const n = Number(s);\n  return Number.isFinite(n) && n >= 0 ? n : null;\n}\n\n\nfunction extractEmails(text) {\n  return [...new Set(\n    (String(text || \"\").match(\n      /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi\n    ) || []).map(x => x.trim().toLowerCase())\n  )];\n}\n\nfunction extractPhones(text) {\n  const found = [];\n\n  for (const line of String(text || \"\").split(/\\r?\\n/)) {\n    if (!/(телефон|тел\\.|мобильн|phone)/i.test(line)) continue;\n\n    const matches = line.match(/\\+?\\d[\\d\\s().-]{6,}\\d/g) || [];\n\n    for (const value of matches) {\n      const digits = value.replace(/\\D/g, \"\");\n      if (digits.length >= 10 && digits.length <= 15) {\n        found.push(value.replace(/\\s+/g, \" \").trim());\n      }\n    }\n  }\n\n  const unique = new Map();\n  for (const phone of found) {\n    const key = phone.replace(/\\D/g, \"\");\n    if (!unique.has(key)) unique.set(key, phone);\n  }\n\n  return [...unique.values()];\n}\n\nfunction extractInn(text) {\n  for (const line of String(text || \"\").split(/\\r?\\n/)) {\n    const rawLabel = (line.split(/[:：]/, 1)[0] || \"\")\n      .toUpperCase()\n      .replace(/[^A-ZА-ЯЁ]/g, \"\");\n\n    const label = rawLabel\n      .replace(/[UI]/g, \"И\")\n      .replace(/H/g, \"Н\");\n\n    if (!label.includes(\"ИНН\")) continue;\n\n    const candidates = line.match(/\\d[\\d\\s-]{8,16}\\d/g) || [];\n\n    for (const candidate of candidates) {\n      const digits = candidate.replace(/\\D/g, \"\");\n      if (digits.length === 10 || digits.length === 12) {\n        return digits;\n      }\n    }\n  }\n\n  return null;\n}\n\nconst records = [];\n\nfor (let i = 0; i < outputs.length; i++) {\n  let content = outputs[i].json?.message?.content;\n\n  if (typeof content !== \"string\") {\n    throw new Error(\"Нет message.content у Ollama, страница \" + (i + 1));\n  }\n\n  content = content.trim();\n\n  const fence = String.fromCharCode(96).repeat(3);\n\n  if (content.startsWith(fence)) {\n    content = content.replace(\n      new RegExp(\"^\" + fence + \"(?:json)?\\\\s*\", \"i\"), \"\"\n    );\n    content = content.replace(\n      new RegExp(\"\\\\s*\" + fence + \"$\"), \"\"\n    );\n  }\n\n  let parsed;\n\n  try {\n    parsed = JSON.parse(content);\n  } catch (e) {\n    throw new Error(\"Ошибка JSON Ollama на странице \" + (i + 1));\n  }\n\n  if (!Array.isArray(parsed.records)) {\n    throw new Error(\"Нет массива records на странице \" + (i + 1));\n  }\n\n  const page = pages[i].json;\n\n  for (let j = 0; j < parsed.records.length; j++) {\n    const r = parsed.records[j] || {};\n    const row = j + 1;\n\n    const warnings = Array.isArray(r.warnings)\n      ? r.warnings.map(String)\n      : [];\n\n    const emails = Array.isArray(r.emails)\n      ? r.emails.filter(Boolean)\n      : [];\n\n    const phones = Array.isArray(r.phones)\n      ? r.phones.filter(Boolean)\n      : [];\n\n    if (r.email) emails.push(r.email);\n    if (r.phone) phones.push(r.phone);\n\n    const pageText = String(page.page_text || \"\");\n    const ocrEmailCandidates = extractEmails(pageText);\n    const ocrPhoneCandidates = extractPhones(pageText);\n    const ocrInn = extractInn(pageText);\n\n    const modelEmailSet = new Set(\n      emails.map(x => String(x).trim().toLowerCase())\n    );\n\n    const unconfirmedEmails = ocrEmailCandidates.filter(\n      x => !modelEmailSet.has(x)\n    );\n\n    const modelPhoneSet = new Set(\n      phones.map(x => String(x).replace(/\\D/g, \"\"))\n    );\n\n    const unconfirmedPhones = ocrPhoneCandidates.filter(\n      x => !modelPhoneSet.has(x.replace(/\\D/g, \"\"))\n    );\n\n    if (unconfirmedEmails.length) {\n      warnings.push(\n        \"ocr_contains_unconfirmed_email_candidates:\" +\n        unconfirmedEmails.length\n      );\n    }\n\n    if (unconfirmedPhones.length) {\n      warnings.push(\n        \"ocr_contains_unconfirmed_phone_candidates:\" +\n        unconfirmedPhones.length\n      );\n    }\n\n    const modelInnDigits = r.inn\n      ? String(r.inn).replace(/\\D/g, \"\")\n      : \"\";\n\n    const validModelInn = [10, 12].includes(modelInnDigits.length)\n      ? modelInnDigits\n      : null;\n\n    const finalInn = validModelInn || ocrInn;\n\n    if (!validModelInn && ocrInn) {\n      warnings.push(\"inn_recovered_from_ocr_labeled_line\");\n    }\n\n    if (r.city && /[A-Za-z]/.test(String(r.city))) {\n      warnings.push(\"city_contains_latin_characters_check_source_pdf\");\n    }\n\n    if (page.needs_review) {\n      warnings.push(\"ocr_page_requires_review\");\n    }\n\n    records.push({\n      ...r,\n      inn: finalInn,\n      email: r.email || emails[0] || null,\n      phone: r.phone || phones[0] || null,\n      emails: [...new Set(\n        emails.map(x => String(x).trim()).filter(Boolean)\n      )],\n      phones: [...new Set(\n        phones.map(x => String(x).trim()).filter(Boolean)\n      )],\n      revenue_rub: normalizeRevenue(r.revenue_rub),\n      source_page: page.source_page,\n      source_row: row,\n      source_row_model: r.source_row || null,\n      source_key: \"p\" + page.source_page + \"-r\" + row,\n      source_locator: \"page=\" + page.source_page + \";row=\" + row,\n      extraction_warnings: [...new Set(warnings)]\n    });\n  }\n}\n\nif (!records.length) {\n  throw new Error(\"Ollama не обнаружил ни одной записи компаний или инвесторов\");\n}\n\nreturn [{ json: { records } }];\n"
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000013",
+        "name": "Save PDF records",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          2640,
+          100
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "POST",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $('Claim and normalize').first().json.batch_id + '/rows' }}",
+          "options": {
+            "timeout": 120000
+          },
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({records: $json.records}) }}"
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000014",
+        "name": "Is XLSX?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1540,
+          400
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "if-xlsx-0001",
+                "leftValue": "={{ $json.file_extension }}",
+                "rightValue": "xlsx",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "GAB2000000000015",
+        "name": "Download XLSX",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          1760,
+          340
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "GET",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $json.batch_id + '/file' }}",
+          "options": {
+            "response": {
+              "response": {
+                "responseFormat": "file",
+                "outputPropertyName": "data"
+              }
+            },
+            "timeout": 120000
+          }
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000016",
+        "name": "Extract XLSX",
+        "type": "n8n-nodes-base.extractFromFile",
+        "typeVersion": 1.1,
+        "position": [
+          1980,
+          340
+        ],
+        "parameters": {
+          "operation": "xlsx",
+          "binaryPropertyName": "data",
+          "options": {
+            "headerRow": true
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000017",
+        "name": "Is XLS?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1760,
+          540
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "if-xls-0001",
+                "leftValue": "={{ $json.file_extension }}",
+                "rightValue": "xls",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "GAB2000000000018",
+        "name": "Download XLS",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          1980,
+          540
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "GET",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $json.batch_id + '/file' }}",
+          "options": {
+            "response": {
+              "response": {
+                "responseFormat": "file",
+                "outputPropertyName": "data"
+              }
+            },
+            "timeout": 120000
+          }
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000019",
+        "name": "Extract XLS",
+        "type": "n8n-nodes-base.extractFromFile",
+        "typeVersion": 1.1,
+        "position": [
+          2200,
+          540
+        ],
+        "parameters": {
+          "operation": "xls",
+          "binaryPropertyName": "data",
+          "options": {
+            "headerRow": true
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000020",
+        "name": "Normalize spreadsheet rows",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2420,
+          420
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst items = $input.all();\n\nif (!items.length) {\n  throw new Error(\"Excel не содержит строк данных\");\n}\n\nfunction norm(value) {\n  return String(value || \"\")\n    .toLowerCase()\n    .replace(/ё/g, \"е\")\n    .replace(/[^0-9a-zа-я]/g, \"\");\n}\n\nfunction findEntry(row, aliases) {\n  const wanted = new Set(aliases.map(norm));\n\n  for (const [key, value] of Object.entries(row)) {\n    if (\n      wanted.has(norm(key)) &&\n      value !== null &&\n      value !== undefined &&\n      String(value).trim() !== \"\"\n    ) {\n      return { key, value };\n    }\n  }\n\n  return null;\n}\n\nfunction pick(row, aliases) {\n  return findEntry(row, aliases)?.value ?? null;\n}\n\nfunction parseNumber(value) {\n  if (value === null || value === undefined || value === \"\") return null;\n  if (typeof value === \"number\") {\n    return Number.isFinite(value) && value >= 0 ? value : null;\n  }\n\n  let s = String(value)\n    .replace(/\\u00a0/g, \" \")\n    .replace(/руб\\.?|₽/gi, \"\")\n    .replace(/\\s/g, \"\")\n    .trim();\n\n  if (s.includes(\",\") && s.includes(\".\")) {\n    if (s.lastIndexOf(\",\") > s.lastIndexOf(\".\")) {\n      s = s.replace(/\\./g, \"\").replace(\",\", \".\");\n    } else {\n      s = s.replace(/,/g, \"\");\n    }\n  } else if (s.includes(\",\")) {\n    const a = s.split(\",\");\n    s = a.length === 2 && a[1].length !== 3\n      ? s.replace(\",\", \".\")\n      : s.replace(/,/g, \"\");\n  }\n\n  const n = Number(s);\n  return Number.isFinite(n) && n >= 0 ? n : null;\n}\n\nconst records = items.map((item, index) => {\n  const row = item.json || {};\n  const warnings = [];\n\n  const company = pick(row, [\n    \"company_name\", \"company\", \"organization\", \"legal_name\",\n    \"counterparty_name\", \"наименование организации\",\n    \"наименование компании\", \"название организации\",\n    \"название компании\", \"организация\", \"компания\",\n    \"контрагент\", \"инвестор\", \"эмитент\"\n  ]);\n\n  const innRaw = pick(row, [\"inn\", \"инн\", \"tax id\"]);\n  const innDigits = innRaw === null\n    ? \"\"\n    : String(innRaw).replace(/\\D/g, \"\");\n\n  const inn = [10, 12].includes(innDigits.length) ? innDigits : null;\n\n  if (innRaw && !inn) warnings.push(\"inn_requires_review\");\n\n  const fullName = pick(row, [\n    \"full_name\", \"contact_person\", \"person_name\", \"fio\",\n    \"фио\", \"фио контакта\", \"контактное фио\",\n    \"контактное лицо\", \"имя контакта\"\n  ]);\n\n  const position = pick(row, [\n    \"position\", \"job_title\", \"title\", \"должность\",\n    \"должность контакта\", \"позиция\"\n  ]);\n\n  const city = pick(row, [\n    \"city\", \"location\", \"город\", \"регион\", \"местоположение\"\n  ]);\n\n  const email = pick(row, [\n    \"email\", \"emails\", \"e-mail\", \"mail\", \"почта\",\n    \"электронная почта\", \"адрес электронной почты\"\n  ]);\n\n  const phone = pick(row, [\n    \"phone\", \"phones\", \"telephone\", \"mobile\",\n    \"телефон\", \"телефоны\", \"мобильный телефон\",\n    \"контактный телефон\", \"рабочий телефон\"\n  ]);\n\n  const revenueEntry = findEntry(row, [\n    \"revenue_rub\", \"annual_revenue_rub\", \"revenue\",\n    \"annual revenue\", \"выручка\", \"годовая выручка\",\n    \"выручка за год\", \"оборот\",\n    \"выручка млн руб\", \"годовая выручка млн руб\",\n    \"выручка тыс руб\", \"выручка млрд руб\"\n  ]);\n\n  let revenueValue = revenueEntry\n    ? parseNumber(revenueEntry.value)\n    : null;\n\n  const revenueKey = revenueEntry ? norm(revenueEntry.key) : \"\";\n\n  let multiplier = 1;\n\n  if (/млрд|billion/.test(revenueKey)) multiplier = 1000000000;\n  else if (/млн|million/.test(revenueKey)) multiplier = 1000000;\n  else if (/тыс|thousand/.test(revenueKey)) multiplier = 1000;\n\n  if (revenueValue !== null) {\n    revenueValue *= multiplier;\n  }\n\n  if (revenueEntry && revenueValue === null) {\n    warnings.push(\"revenue_requires_review\");\n  }\n\n  const yearRaw = pick(row, [\n    \"revenue_year\", \"год выручки\", \"отчетный год\",\n    \"отчётный год\", \"годовой отчет\"\n  ]);\n\n  const year = yearRaw === null\n    ? null\n    : Number.parseInt(yearRaw, 10);\n\n  const revenueYear =\n    Number.isInteger(year) && year >= 1900 && year <= 2100\n      ? year\n      : null;\n\n  if (yearRaw !== null && revenueYear === null) {\n    warnings.push(\"revenue_year_requires_review\");\n  }\n\n  return {\n    ...row,\n    company_name: company === null ? null : String(company).trim(),\n    inn,\n    city: city === null ? null : String(city).trim(),\n    full_name: fullName === null ? null : String(fullName).trim(),\n    position: position === null ? null : String(position).trim(),\n    email: email === null ? null : String(email).trim(),\n    phone: phone === null ? null : String(phone).trim(),\n    revenue_rub: revenueValue,\n    revenue_year: revenueYear,\n    revenue_source: revenueEntry ? \"document\" : null,\n    source_row: index + 2,\n    source_key: \"row-\" + (index + 2),\n    source_locator: \"row=\" + (index + 2),\n    extraction_warnings: warnings\n  };\n});\n\nreturn records.map(json => ({ json }));\n"
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000021",
+        "name": "Bundle spreadsheet records",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2640,
+          420
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst records = $input.all().map(x => x.json);\n\nif (!records.length) {\n  throw new Error(\"Нет строк Excel для записи в CRM\");\n}\n\nreturn [{ json: { records } }];\n"
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000022",
+        "name": "Save spreadsheet records",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          2860,
+          420
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "POST",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $('Claim and normalize').first().json.batch_id + '/rows' }}",
+          "options": {
+            "timeout": 120000
+          },
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({records: $json.records}) }}"
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000023",
+        "name": "Unsupported file format",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1980,
+          760
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst ext = $(\"Claim and normalize\").first().json.file_extension;\n\nreturn [{\n  json: {\n    error: \"Формат .\" + ext +\n      \" пока не поддерживается. Доступны PDF, XLS, XLSX, DOC и DOCX.\"\n  }\n}];\n"
+        }
+      },
+      {
+        "id": "GAB2000000000024",
+        "name": "Mark batch failed",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          3100,
+          760
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "POST",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $('Claim and normalize').first().json.batch_id + '/fail' }}",
+          "options": {
+            "timeout": 120000
+          },
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({error: $json.error?.message || $json.message || $json.description || $json.error || 'Ошибка обработки файла'}) }}"
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        }
+      },
+      {
+        "id": "6f87045b-1bb5-412f-ae33-e0752c532d44",
+        "name": "Is Word?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1980,
+          720
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "6ccc815b-8832-474b-bf2d-f04bd277bfb6",
+                "leftValue": "={{ ['doc', 'docx'].includes(String($json.file_extension || '').toLowerCase()) ? 'word' : 'other' }}",
+                "rightValue": "word",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "22f836db-42c7-4fa3-b916-a73474dba5b9",
+        "name": "Download Word",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          2200,
+          720
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "GET",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $json.batch_id + '/file' }}",
+          "options": {
+            "response": {
+              "response": {
+                "responseFormat": "file",
+                "outputPropertyName": "data"
+              }
+            },
+            "timeout": 120000
+          }
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
+          }
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "fbc53bb7-1fbe-44b9-a245-2b0de9e73bfb",
+        "name": "OCR Word",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          2420,
+          720
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "method": "POST",
+          "url": "http://gab_ocr:8000/extract/word-text",
+          "sendBody": true,
+          "contentType": "multipart-form-data",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "parameterType": "formBinaryData",
+                "name": "file",
+                "inputDataFieldName": "data"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 900000
+          }
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "6Wb6WQE64aBvpr95",
+            "name": "GAB OCR API"
+          }
+        },
+        "onError": "continueErrorOutput"
+      }
+    ],
+    "connections": {
+      "Manual start": {
+        "main": [
+          [
+            {
+              "node": "List uploaded batches",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Every minute": {
+        "main": [
+          [
+            {
+              "node": "List uploaded batches",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "List uploaded batches": {
+        "main": [
+          [
+            {
+              "node": "Select oldest uploaded batch",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Select oldest uploaded batch": {
+        "main": [
+          [
+            {
+              "node": "Claim batch",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Claim batch": {
+        "main": [
+          [
+            {
+              "node": "Claim and normalize",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Claim and normalize": {
+        "main": [
+          [
+            {
+              "node": "Is PDF?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is PDF?": {
+        "main": [
+          [
+            {
+              "node": "Download PDF",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Is XLSX?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Download PDF": {
+        "main": [
+          [
+            {
+              "node": "OCR PDF",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "OCR PDF": {
+        "main": [
+          [
+            {
+              "node": "Prepare PDF pages",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Prepare PDF pages": {
+        "main": [
+          [
+            {
+              "node": "Ollama extract investors",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Ollama extract investors": {
+        "main": [
+          [
+            {
+              "node": "Parse PDF records",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse PDF records": {
+        "main": [
+          [
+            {
+              "node": "Save PDF records",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is XLSX?": {
+        "main": [
+          [
+            {
+              "node": "Download XLSX",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Is XLS?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Download XLSX": {
+        "main": [
+          [
+            {
+              "node": "Extract XLSX",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extract XLSX": {
+        "main": [
+          [
+            {
+              "node": "Normalize spreadsheet rows",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is XLS?": {
+        "main": [
+          [
+            {
+              "node": "Download XLS",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Is Word?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Download XLS": {
+        "main": [
+          [
+            {
+              "node": "Extract XLS",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extract XLS": {
+        "main": [
+          [
+            {
+              "node": "Normalize spreadsheet rows",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Normalize spreadsheet rows": {
+        "main": [
+          [
+            {
+              "node": "Bundle spreadsheet records",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Bundle spreadsheet records": {
+        "main": [
+          [
+            {
+              "node": "Save spreadsheet records",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Unsupported file format": {
+        "main": [
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Word?": {
+        "main": [
+          [
+            {
+              "node": "Download Word",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Unsupported file format",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Download Word": {
+        "main": [
+          [
+            {
+              "node": "OCR Word",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "OCR Word": {
+        "main": [
+          [
+            {
+              "node": "Prepare PDF pages",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "timezone": "Europe/Bratislava"
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "nodeGroups": [],
+    "pinData": {},
+    "versionId": "c04e17dc-da2e-4065-989b-117b41c79ef4",
+    "activeVersionId": null,
+    "versionCounter": 4,
+    "triggerCount": 0,
+    "sourceWorkflowId": null,
+    "tags": [],
+    "shared": [
+      {
+        "updatedAt": "2026-11-16T16:33:43.353Z",
+        "createdAt": "2026-11-16T16:33:43.353Z",
+        "role": "workflow:owner",
+        "workflowId": "GAB02InvImp20261",
+        "projectId": "XkDlsaeYuTX2LzRf",
+        "project": {
+          "updatedAt": "2026-10-13T08:50:47.567Z",
+          "createdAt": "2026-10-13T08:14:27.994Z",
+          "id": "XkDlsaeYuTX2LzRf",
+          "name": "Kamil galimovkamil613@gmail.com <galimovkamil613@gmail.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "customTelemetryTags": [],
+          "creatorId": "7679d4ec-44a4-4166-814a-f163d3126a71"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]
