@@ -1,0 +1,19 @@
+{
+  "compose_file": "/root/ai-stack/docker-compose.yml",
+  "crm_container": "gab-review",
+  "postgres_container": "ai-stack-postgres_ai-1",
+  "postgres_user": "n8n_user",
+  "database": "gab_crm",
+  "n8n_container": "ai-stack-n8n_ai-1",
+  "n8n_version": "2.42.7",
+  "ocr_service": "gab_ocr",
+  "ocr_version": "0.4.4",
+  "backup_dir": "/var/backups/gab-invest",
+  "state_dir": "/var/lib/gab-invest/deployments",
+  "age_identity": "/root/.config/gab-invest/backup.agekey",
+  "age_recipient": "",
+  "publication_wait_seconds": 35,
+  "health_attempts": 20,
+  "extra_config_paths": [],
+  "publication_timeout_seconds": 180
+}

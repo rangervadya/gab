@@ -243,3 +243,9 @@ investor-imports/
 credentials*.json
 n8n-credentials*.json
 .DS_Store
+
+# Deployment encryption keys and local recovery material
+*.agekey
+*.tar.age
+.ssh/
+deploy.local.json

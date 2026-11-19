@@ -157,6 +157,18 @@ class ImportApiTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(c.post('/api/mailings/imports', files={'file':(name,data,mime)}).status_code, 422)
 
+    def test_z_reapply_migration_preserves_records_and_indexes(self):
+        root=Path(__file__).resolve().parents[1]
+        before=self.conn.execute('SELECT id, to_jsonb(r) FROM gab_crm_import_rows r ORDER BY id').fetchall()
+        self.assertTrue(before, 'Earlier synthetic tests must have populated rows')
+        tables_before=self.conn.execute("SELECT oid, relname FROM pg_class WHERE relname IN ('gab_crm_import_rows','gab_crm_import_batches','gab_crm_import_edits','gab_crm_import_edits_row_idx') ORDER BY relname").fetchall()
+        audit_before=self.conn.execute('SELECT count(*) FROM gab_crm_import_edits').fetchone()[0]
+        self.conn.execute((root/'migrations/20261119_import_editor.sql').read_text())
+        self.conn.execute((root/'migrations/20261119_import_editor.sql').read_text())
+        self.assertEqual(before,self.conn.execute('SELECT id, to_jsonb(r) FROM gab_crm_import_rows r ORDER BY id').fetchall())
+        self.assertEqual(tables_before,self.conn.execute("SELECT oid, relname FROM pg_class WHERE relname IN ('gab_crm_import_rows','gab_crm_import_batches','gab_crm_import_edits','gab_crm_import_edits_row_idx') ORDER BY relname").fetchall())
+        self.assertEqual(audit_before,self.conn.execute('SELECT count(*) FROM gab_crm_import_edits').fetchone()[0])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,3 +1,5 @@
+> Офисный сервер: единая команда обновления, аудит фактической конфигурации и rollback — [docs/DEPLOY_OFFICE_RU.md](docs/DEPLOY_OFFICE_RU.md).
+
 > Импорт инвесторов: актуальный аудит, ограничения, обновление и восстановление — [docs/IMPORT_PRODUCTION_RU.md](docs/IMPORT_PRODUCTION_RU.md). Ниже сохранено исходное описание MVP реестра.
 
 # GAB Review Center — MVP

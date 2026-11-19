@@ -62,10 +62,7 @@
             "id": "XXzFWDhFuvZAYPmj",
             "name": "GAB CRM"
           }
-        },
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        }
       },
       {
         "id": "GAB2000000000004",
@@ -185,10 +182,7 @@
             "name": "GAB CRM"
           }
         },
-        "onError": "continueErrorOutput",
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "GAB2000000000009",
@@ -225,10 +219,7 @@
             "name": "GAB OCR API"
           }
         },
-        "onError": "continueErrorOutput",
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "GAB2000000000010",
@@ -242,7 +233,7 @@
         "parameters": {
           "mode": "runOnceForAllItems",
           "language": "javaScript",
-          "jsCode": "\nconst root = $input.first()?.json || {};\n\nif (!root.ok || !Array.isArray(root.pages)) {\n  throw new Error(\"OCR не вернул корректный массив pages\");\n}\n\nconst batchId = $(\"Claim and normalize\").first().json.batch_id;\n\nconst schema = {\n  type: \"object\",\n  additionalProperties: false,\n  properties: {\n    records: {\n      type: \"array\",\n      items: {\n        type: \"object\",\n        additionalProperties: false,\n        properties: {\n          company_name: {type: [\"string\", \"null\"]},\n          inn: {type: [\"string\", \"null\"]},\n          city: {type: [\"string\", \"null\"]},\n          full_name: {type: [\"string\", \"null\"]},\n          position: {type: [\"string\", \"null\"]},\n          email: {type: [\"string\", \"null\"]},\n          phone: {type: [\"string\", \"null\"]},\n          emails: {type: \"array\", items: {type: \"string\"}},\n          phones: {type: \"array\", items: {type: \"string\"}},\n          revenue_rub: {type: [\"number\", \"null\"]},\n          revenue_year: {type: [\"integer\", \"null\"]},\n          source_row: {type: [\"integer\", \"null\"]},\n          warnings: {type: \"array\", items: {type: \"string\"}}\n        },\n        required: [\n          \"company_name\", \"inn\", \"city\", \"full_name\", \"position\",\n          \"email\", \"phone\", \"emails\", \"phones\", \"revenue_rub\",\n          \"revenue_year\", \"source_row\", \"warnings\"\n        ]\n      }\n    }\n  },\n  required: [\"records\"]\n};\n\nfor (const key of ['address','website','industry','general_phone','general_email','revenue_currency','revenue_source','financial_check_status','investor_type','comments']) {\n  schema.properties.records.items.properties[key] = {type: ['string', 'null']};\n}\nconst systemPrompt =\n  \"Ты извлекаешь сведения об инвесторах и компаниях из русскоязычных документов. \" +\n  \"Извлеки ВСЕ отдельные компании и контакты, которые явно указаны на странице. \" +\n  \"Не объединяй разные компании. Не выдумывай ИНН, телефоны, email, город или выручку. \" +\n  \"Сохраняй все найденные email и телефоны в массивах. \" +\n  \"ИНН — только 10 или 12 цифр, если он полностью читается. \" +\n  \"Выручку записывай числом в рублях только если сумма и единицы однозначны. \" +\n  \"При неоднозначности оставляй null и добавляй предупреждение. \" +\n  \"Не включай заголовки и рекламные фрагменты. Строго соблюдай JSON Schema.\";\n\nconst result = root.pages.map((p, i) => {\n  const page = {\n    batch_id: batchId,\n    source_page: Number(p.page) || i + 1,\n    page_text: String(p.raw_text || \"\"),\n    source_locator: p.source_locator || null,\n    needs_review: Boolean(p.needs_review),\n    ocr_error: p.ocr_error || null\n  };\n\n  return {\n    json: {\n      ...page,\n      ollama_request: {\n        model: \"qwen2.5:7b\",\n        stream: false,\n        format: schema,\n        options: {\n          temperature: 0,\n          num_ctx: 16384,\n          num_predict: 6000\n        },\n        messages: [\n          {role: \"system\", content: systemPrompt},\n          {\n            role: \"user\",\n            content:\n              \"Извлеки все записи инвесторов и компаний с этой страницы. \" +\n              \"Не объединяй разные контакты. Сохраняй порядок появления. \" +\n              \"Текст страницы с номером: \" +\n              String(page.source_page) + \"\\n\" + page.page_text\n          }\n        ]\n      }\n    }\n  };\n});\n\nif (!result.length) {\n  throw new Error(\"В PDF нет страниц\");\n}\n\nif (result.every(x => !x.json.page_text.trim())) {\n  throw new Error(\"OCR не извлёк текст ни с одной страницы\");\n}\n\nreturn result;\n"
+          "jsCode": "\nconst root = $input.first()?.json || {};\n\nif (!root.ok || !Array.isArray(root.pages)) {\n  throw new Error(\"OCR не вернул корректный массив pages\");\n}\n\nconst batchId = $(\"Claim and normalize\").first().json.batch_id;\n\nconst schema = {\n  type: \"object\",\n  additionalProperties: false,\n  properties: {\n    records: {\n      type: \"array\",\n      items: {\n        type: \"object\",\n        additionalProperties: false,\n        properties: {\n          company_name: {type: [\"string\", \"null\"]},\n          inn: {type: [\"string\", \"null\"]},\n          city: {type: [\"string\", \"null\"]},\n          full_name: {type: [\"string\", \"null\"]},\n          position: {type: [\"string\", \"null\"]},\n          email: {type: [\"string\", \"null\"]},\n          phone: {type: [\"string\", \"null\"]},\n          emails: {type: \"array\", items: {type: \"string\"}},\n          phones: {type: \"array\", items: {type: \"string\"}},\n          revenue_rub: {type: [\"number\", \"null\"]},\n          revenue_year: {type: [\"integer\", \"null\"]},\n          source_row: {type: [\"integer\", \"null\"]},\n          warnings: {type: \"array\", items: {type: \"string\"}}\n        },\n        required: [\n          \"company_name\", \"inn\", \"city\", \"full_name\", \"position\",\n          \"email\", \"phone\", \"emails\", \"phones\", \"revenue_rub\",\n          \"revenue_year\", \"source_row\", \"warnings\"\n        ]\n      }\n    }\n  },\n  required: [\"records\"]\n};\n\nconst systemPrompt =\n  \"Ты извлекаешь сведения об инвесторах и компаниях из русскоязычных документов. \" +\n  \"Извлеки ВСЕ отдельные компании и контакты, которые явно указаны на странице. \" +\n  \"Не объединяй разные компании. Не выдумывай ИНН, телефоны, email, город или выручку. \" +\n  \"Сохраняй все найденные email и телефоны в массивах. \" +\n  \"ИНН — только 10 или 12 цифр, если он полностью читается. \" +\n  \"Выручку записывай числом в рублях только если сумма и единицы однозначны. \" +\n  \"При неоднозначности оставляй null и добавляй предупреждение. \" +\n  \"Не включай заголовки и рекламные фрагменты. Строго соблюдай JSON Schema.\";\n\nconst result = root.pages.map((p, i) => {\n  const page = {\n    batch_id: batchId,\n    source_page: Number(p.page) || i + 1,\n    page_text: String(p.raw_text || \"\"),\n    needs_review: Boolean(p.needs_review),\n    ocr_error: p.ocr_error || null\n  };\n\n  return {\n    json: {\n      ...page,\n      ollama_request: {\n        model: \"qwen2.5:7b\",\n        stream: false,\n        format: schema,\n        options: {\n          temperature: 0,\n          num_ctx: 16384,\n          num_predict: 6000\n        },\n        messages: [\n          {role: \"system\", content: systemPrompt},\n          {\n            role: \"user\",\n            content:\n              \"Извлеки все записи инвесторов и компаний с этой страницы. \" +\n              \"Не объединяй разные контакты. Сохраняй порядок появления. \" +\n              \"Текст страницы с номером: \" +\n              String(page.source_page) + \"\\n\" + page.page_text\n          }\n        ]\n      }\n    }\n  };\n});\n\nif (!result.length) {\n  throw new Error(\"В PDF нет страниц\");\n}\n\nif (result.every(x => !x.json.page_text.trim())) {\n  throw new Error(\"OCR не извлёк текст ни с одной страницы\");\n}\n\nreturn result;\n"
         },
         "onError": "continueErrorOutput"
       },
@@ -266,10 +257,7 @@
             "timeout": 1800000
           }
         },
-        "onError": "continueErrorOutput",
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "GAB2000000000012",
@@ -283,7 +271,7 @@
         "parameters": {
           "mode": "runOnceForAllItems",
           "language": "javaScript",
-          "jsCode": "\nconst outputs = $input.all();\nconst pages = $(\"Prepare PDF pages\").all();\n\nif (outputs.length !== pages.length) {\n  throw new Error(\n    \"Не все страницы обработаны Ollama: \" +\n    outputs.length + \" из \" + pages.length\n  );\n}\n\nfunction normalizeRevenue(value) {\n  if (value === null || value === undefined || value === \"\") {\n    return null;\n  }\n\n  if (typeof value === \"number\" && Number.isFinite(value)) {\n    return value;\n  }\n\n  let s = String(value)\n    .replace(/\\u00a0/g, \" \")\n    .replace(/руб\\.?|₽/gi, \"\")\n    .replace(/\\s/g, \"\")\n    .trim();\n\n  if (s.includes(\",\") && s.includes(\".\")) {\n    if (s.lastIndexOf(\",\") > s.lastIndexOf(\".\")) {\n      s = s.replace(/\\./g, \"\").replace(\",\", \".\");\n    } else {\n      s = s.replace(/,/g, \"\");\n    }\n  } else if (s.includes(\",\")) {\n    const parts = s.split(\",\");\n    s = parts.length === 2 && parts[1].length !== 3\n      ? s.replace(\",\", \".\")\n      : s.replace(/,/g, \"\");\n  }\n\n  const n = Number(s);\n  return Number.isFinite(n) && n >= 0 ? n : null;\n}\n\n\nfunction extractEmails(text) {\n  return [...new Set(\n    (String(text || \"\").match(\n      /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi\n    ) || []).map(x => x.trim().toLowerCase())\n  )];\n}\n\nfunction extractPhones(text) {\n  const found = [];\n\n  for (const line of String(text || \"\").split(/\\r?\\n/)) {\n    if (!/(телефон|тел\\.|мобильн|phone)/i.test(line)) continue;\n\n    const matches = line.match(/\\+?\\d[\\d\\s().-]{6,}\\d/g) || [];\n\n    for (const value of matches) {\n      const digits = value.replace(/\\D/g, \"\");\n      if (digits.length >= 10 && digits.length <= 15) {\n        found.push(value.replace(/\\s+/g, \" \").trim());\n      }\n    }\n  }\n\n  const unique = new Map();\n  for (const phone of found) {\n    const key = phone.replace(/\\D/g, \"\");\n    if (!unique.has(key)) unique.set(key, phone);\n  }\n\n  return [...unique.values()];\n}\n\nfunction extractInn(text) {\n  for (const line of String(text || \"\").split(/\\r?\\n/)) {\n    const rawLabel = (line.split(/[:：]/, 1)[0] || \"\")\n      .toUpperCase()\n      .replace(/[^A-ZА-ЯЁ]/g, \"\");\n\n    const label = rawLabel\n      .replace(/[UI]/g, \"И\")\n      .replace(/H/g, \"Н\");\n\n    if (!label.includes(\"ИНН\")) continue;\n\n    const candidates = line.match(/\\d[\\d\\s-]{8,16}\\d/g) || [];\n\n    for (const candidate of candidates) {\n      const digits = candidate.replace(/\\D/g, \"\");\n      if (digits.length === 10 || digits.length === 12) {\n        return digits;\n      }\n    }\n  }\n\n  return null;\n}\n\nconst records = [];\n\nfor (let i = 0; i < outputs.length; i++) {\n  let content = outputs[i].json?.message?.content;\n\n  if (typeof content !== \"string\") {\n    throw new Error(\"Нет message.content у Ollama, страница \" + (i + 1));\n  }\n\n  content = content.trim();\n\n  const fence = String.fromCharCode(96).repeat(3);\n\n  if (content.startsWith(fence)) {\n    content = content.replace(\n      new RegExp(\"^\" + fence + \"(?:json)?\\\\s*\", \"i\"), \"\"\n    );\n    content = content.replace(\n      new RegExp(\"\\\\s*\" + fence + \"$\"), \"\"\n    );\n  }\n\n  let parsed;\n\n  try {\n    parsed = JSON.parse(content);\n  } catch (e) {\n    throw new Error(\"Ошибка JSON Ollama на странице \" + (i + 1));\n  }\n\n  if (!Array.isArray(parsed.records)) {\n    throw new Error(\"Нет массива records на странице \" + (i + 1));\n  }\n\n  const page = pages[i].json;\n\n  for (let j = 0; j < parsed.records.length; j++) {\n    const r = parsed.records[j] || {};\n    const row = j + 1;\n\n    const warnings = Array.isArray(r.warnings)\n      ? r.warnings.map(String)\n      : [];\n\n    const emails = Array.isArray(r.emails)\n      ? r.emails.filter(Boolean)\n      : [];\n\n    const phones = Array.isArray(r.phones)\n      ? r.phones.filter(Boolean)\n      : [];\n\n    if (r.email) emails.push(r.email);\n    if (r.phone) phones.push(r.phone);\n\n    const pageText = String(page.page_text || \"\");\n    const ocrEmailCandidates = extractEmails(pageText);\n    const ocrPhoneCandidates = extractPhones(pageText);\n    const ocrInn = extractInn(pageText);\n\n    const modelEmailSet = new Set(\n      emails.map(x => String(x).trim().toLowerCase())\n    );\n\n    const unconfirmedEmails = ocrEmailCandidates.filter(\n      x => !modelEmailSet.has(x)\n    );\n\n    const modelPhoneSet = new Set(\n      phones.map(x => String(x).replace(/\\D/g, \"\"))\n    );\n\n    const unconfirmedPhones = ocrPhoneCandidates.filter(\n      x => !modelPhoneSet.has(x.replace(/\\D/g, \"\"))\n    );\n\n    if (unconfirmedEmails.length) {\n      warnings.push(\n        \"ocr_contains_unconfirmed_email_candidates:\" +\n        unconfirmedEmails.length\n      );\n    }\n\n    if (unconfirmedPhones.length) {\n      warnings.push(\n        \"ocr_contains_unconfirmed_phone_candidates:\" +\n        unconfirmedPhones.length\n      );\n    }\n\n    const modelInnDigits = r.inn\n      ? String(r.inn).replace(/\\D/g, \"\")\n      : \"\";\n\n    const validModelInn = [10, 12].includes(modelInnDigits.length)\n      ? modelInnDigits\n      : null;\n\n    const finalInn = validModelInn || (parsed.records.length === 1 ? ocrInn : null);\n\n    if (!validModelInn && finalInn) {\n      warnings.push(\"inn_recovered_from_ocr_labeled_line\");\n    }\n\n    if (r.city && /[A-Za-z]/.test(String(r.city))) {\n      warnings.push(\"city_contains_latin_characters_check_source_pdf\");\n    }\n\n    if (page.needs_review) {\n      warnings.push(\"ocr_page_requires_review\");\n    }\n\n    records.push({\n      ...r,\n      inn: finalInn,\n      email: r.email || emails[0] || null,\n      phone: r.phone || phones[0] || null,\n      emails: [...new Set(\n        emails.map(x => String(x).trim()).filter(Boolean)\n      )],\n      phones: [...new Set(\n        phones.map(x => String(x).trim()).filter(Boolean)\n      )],\n      revenue_rub: normalizeRevenue(r.revenue_rub),\n      source_page: page.source_page,\n      source_row: row,\n      source_row_model: r.source_row || null,\n      source_key: \"p\" + page.source_page + \"-r\" + row,\n      source_locator: (page.source_locator || \"page=\" + page.source_page) + \";record=\" + row,\n      extraction_warnings: [...new Set(warnings)]\n    });\n  }\n}\n\nif (!records.length) {\n  throw new Error(\"Ollama не обнаружил ни одной записи компаний или инвесторов\");\n}\n\nreturn [{ json: { records } }];\n"
+          "jsCode": "\nconst outputs = $input.all();\nconst pages = $(\"Prepare PDF pages\").all();\n\nif (outputs.length !== pages.length) {\n  throw new Error(\n    \"Не все страницы обработаны Ollama: \" +\n    outputs.length + \" из \" + pages.length\n  );\n}\n\nfunction normalizeRevenue(value) {\n  if (value === null || value === undefined || value === \"\") {\n    return null;\n  }\n\n  if (typeof value === \"number\" && Number.isFinite(value)) {\n    return value;\n  }\n\n  let s = String(value)\n    .replace(/\\u00a0/g, \" \")\n    .replace(/руб\\.?|₽/gi, \"\")\n    .replace(/\\s/g, \"\")\n    .trim();\n\n  if (s.includes(\",\") && s.includes(\".\")) {\n    if (s.lastIndexOf(\",\") > s.lastIndexOf(\".\")) {\n      s = s.replace(/\\./g, \"\").replace(\",\", \".\");\n    } else {\n      s = s.replace(/,/g, \"\");\n    }\n  } else if (s.includes(\",\")) {\n    const parts = s.split(\",\");\n    s = parts.length === 2 && parts[1].length !== 3\n      ? s.replace(\",\", \".\")\n      : s.replace(/,/g, \"\");\n  }\n\n  const n = Number(s);\n  return Number.isFinite(n) && n >= 0 ? n : null;\n}\n\n\nfunction extractEmails(text) {\n  return [...new Set(\n    (String(text || \"\").match(\n      /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi\n    ) || []).map(x => x.trim().toLowerCase())\n  )];\n}\n\nfunction extractPhones(text) {\n  const found = [];\n\n  for (const line of String(text || \"\").split(/\\r?\\n/)) {\n    if (!/(телефон|тел\\.|мобильн|phone)/i.test(line)) continue;\n\n    const matches = line.match(/\\+?\\d[\\d\\s().-]{6,}\\d/g) || [];\n\n    for (const value of matches) {\n      const digits = value.replace(/\\D/g, \"\");\n      if (digits.length >= 10 && digits.length <= 15) {\n        found.push(value.replace(/\\s+/g, \" \").trim());\n      }\n    }\n  }\n\n  const unique = new Map();\n  for (const phone of found) {\n    const key = phone.replace(/\\D/g, \"\");\n    if (!unique.has(key)) unique.set(key, phone);\n  }\n\n  return [...unique.values()];\n}\n\nfunction extractInn(text) {\n  for (const line of String(text || \"\").split(/\\r?\\n/)) {\n    const rawLabel = (line.split(/[:：]/, 1)[0] || \"\")\n      .toUpperCase()\n      .replace(/[^A-ZА-ЯЁ]/g, \"\");\n\n    const label = rawLabel\n      .replace(/[UI]/g, \"И\")\n      .replace(/H/g, \"Н\");\n\n    if (!label.includes(\"ИНН\")) continue;\n\n    const candidates = line.match(/\\d[\\d\\s-]{8,16}\\d/g) || [];\n\n    for (const candidate of candidates) {\n      const digits = candidate.replace(/\\D/g, \"\");\n      if (digits.length === 10 || digits.length === 12) {\n        return digits;\n      }\n    }\n  }\n\n  return null;\n}\n\nconst records = [];\n\nfor (let i = 0; i < outputs.length; i++) {\n  let content = outputs[i].json?.message?.content;\n\n  if (typeof content !== \"string\") {\n    throw new Error(\"Нет message.content у Ollama, страница \" + (i + 1));\n  }\n\n  content = content.trim();\n\n  const fence = String.fromCharCode(96).repeat(3);\n\n  if (content.startsWith(fence)) {\n    content = content.replace(\n      new RegExp(\"^\" + fence + \"(?:json)?\\\\s*\", \"i\"), \"\"\n    );\n    content = content.replace(\n      new RegExp(\"\\\\s*\" + fence + \"$\"), \"\"\n    );\n  }\n\n  let parsed;\n\n  try {\n    parsed = JSON.parse(content);\n  } catch (e) {\n    throw new Error(\"Ошибка JSON Ollama на странице \" + (i + 1));\n  }\n\n  if (!Array.isArray(parsed.records)) {\n    throw new Error(\"Нет массива records на странице \" + (i + 1));\n  }\n\n  const page = pages[i].json;\n\n  for (let j = 0; j < parsed.records.length; j++) {\n    const r = parsed.records[j] || {};\n    const row = j + 1;\n\n    const warnings = Array.isArray(r.warnings)\n      ? r.warnings.map(String)\n      : [];\n\n    const emails = Array.isArray(r.emails)\n      ? r.emails.filter(Boolean)\n      : [];\n\n    const phones = Array.isArray(r.phones)\n      ? r.phones.filter(Boolean)\n      : [];\n\n    if (r.email) emails.push(r.email);\n    if (r.phone) phones.push(r.phone);\n\n    const pageText = String(page.page_text || \"\");\n    const ocrEmailCandidates = extractEmails(pageText);\n    const ocrPhoneCandidates = extractPhones(pageText);\n    const ocrInn = extractInn(pageText);\n\n    const modelEmailSet = new Set(\n      emails.map(x => String(x).trim().toLowerCase())\n    );\n\n    const unconfirmedEmails = ocrEmailCandidates.filter(\n      x => !modelEmailSet.has(x)\n    );\n\n    const modelPhoneSet = new Set(\n      phones.map(x => String(x).replace(/\\D/g, \"\"))\n    );\n\n    const unconfirmedPhones = ocrPhoneCandidates.filter(\n      x => !modelPhoneSet.has(x.replace(/\\D/g, \"\"))\n    );\n\n    if (unconfirmedEmails.length) {\n      warnings.push(\n        \"ocr_contains_unconfirmed_email_candidates:\" +\n        unconfirmedEmails.length\n      );\n    }\n\n    if (unconfirmedPhones.length) {\n      warnings.push(\n        \"ocr_contains_unconfirmed_phone_candidates:\" +\n        unconfirmedPhones.length\n      );\n    }\n\n    const modelInnDigits = r.inn\n      ? String(r.inn).replace(/\\D/g, \"\")\n      : \"\";\n\n    const validModelInn = [10, 12].includes(modelInnDigits.length)\n      ? modelInnDigits\n      : null;\n\n    const finalInn = validModelInn || (parsed.records.length === 1 ? ocrInn : null);\n\n    if (!validModelInn && finalInn) {\n      warnings.push(\"inn_recovered_from_ocr_labeled_line\");\n    }\n\n    if (r.city && /[A-Za-z]/.test(String(r.city))) {\n      warnings.push(\"city_contains_latin_characters_check_source_pdf\");\n    }\n\n    if (page.needs_review) {\n      warnings.push(\"ocr_page_requires_review\");\n    }\n\n    records.push({\n      ...r,\n      inn: finalInn,\n      email: r.email || emails[0] || null,\n      phone: r.phone || phones[0] || null,\n      emails: [...new Set(\n        emails.map(x => String(x).trim()).filter(Boolean)\n      )],\n      phones: [...new Set(\n        phones.map(x => String(x).trim()).filter(Boolean)\n      )],\n      revenue_rub: normalizeRevenue(r.revenue_rub),\n      source_page: page.source_page,\n      source_row: row,\n      source_row_model: r.source_row || null,\n      source_key: \"p\" + page.source_page + \"-r\" + row,\n      source_locator: \"page=\" + page.source_page + \";row=\" + row,\n      extraction_warnings: [...new Set(warnings)]\n    });\n  }\n}\n\nif (!records.length) {\n  throw new Error(\"Ollama не обнаружил ни одной записи компаний или инвесторов\");\n}\n\nreturn [{ json: { records } }];\n"
         },
         "onError": "continueErrorOutput"
       },
@@ -315,10 +303,7 @@
             "name": "GAB CRM"
           }
         },
-        "onError": "continueErrorOutput",
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "GAB2000000000014",
@@ -383,50 +368,25 @@
             "name": "GAB CRM"
           }
         },
-        "onError": "continueErrorOutput",
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "GAB2000000000016",
         "name": "Extract XLSX",
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.5,
+        "type": "n8n-nodes-base.extractFromFile",
+        "typeVersion": 1.1,
         "position": [
           1980,
           340
         ],
         "parameters": {
-          "authentication": "genericCredentialType",
-          "genericAuthType": "httpHeaderAuth",
-          "method": "POST",
-          "url": "http://gab_ocr:8000/extract/document-text",
-          "sendBody": true,
-          "contentType": "multipart-form-data",
-          "bodyParameters": {
-            "parameters": [
-              {
-                "parameterType": "formBinaryData",
-                "name": "file",
-                "inputDataFieldName": "data"
-              }
-            ]
-          },
+          "operation": "xlsx",
+          "binaryPropertyName": "data",
           "options": {
-            "timeout": 900000
+            "headerRow": true
           }
         },
-        "onError": "continueErrorOutput",
-        "credentials": {
-          "httpHeaderAuth": {
-            "id": "6Wb6WQE64aBvpr95",
-            "name": "GAB OCR API"
-          }
-        },
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "GAB2000000000017",
@@ -491,50 +451,87 @@
             "name": "GAB CRM"
           }
         },
-        "onError": "continueErrorOutput",
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "GAB2000000000019",
         "name": "Extract XLS",
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.5,
+        "type": "n8n-nodes-base.extractFromFile",
+        "typeVersion": 1.1,
         "position": [
           2200,
           540
         ],
         "parameters": {
-          "authentication": "genericCredentialType",
-          "genericAuthType": "httpHeaderAuth",
-          "method": "POST",
-          "url": "http://gab_ocr:8000/extract/document-text",
-          "sendBody": true,
-          "contentType": "multipart-form-data",
-          "bodyParameters": {
-            "parameters": [
-              {
-                "parameterType": "formBinaryData",
-                "name": "file",
-                "inputDataFieldName": "data"
-              }
-            ]
-          },
+          "operation": "xls",
+          "binaryPropertyName": "data",
           "options": {
-            "timeout": 900000
+            "headerRow": true
           }
         },
-        "onError": "continueErrorOutput",
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000020",
+        "name": "Normalize spreadsheet rows",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2420,
+          420
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst items = $input.all();\n\nif (!items.length) {\n  throw new Error(\"Excel не содержит строк данных\");\n}\n\nfunction norm(value) {\n  return String(value || \"\")\n    .toLowerCase()\n    .replace(/ё/g, \"е\")\n    .replace(/[^0-9a-zа-я]/g, \"\");\n}\n\nfunction findEntry(row, aliases) {\n  const wanted = new Set(aliases.map(norm));\n\n  for (const [key, value] of Object.entries(row)) {\n    if (\n      wanted.has(norm(key)) &&\n      value !== null &&\n      value !== undefined &&\n      String(value).trim() !== \"\"\n    ) {\n      return { key, value };\n    }\n  }\n\n  return null;\n}\n\nfunction pick(row, aliases) {\n  return findEntry(row, aliases)?.value ?? null;\n}\n\nfunction parseNumber(value) {\n  if (value === null || value === undefined || value === \"\") return null;\n  if (typeof value === \"number\") {\n    return Number.isFinite(value) && value >= 0 ? value : null;\n  }\n\n  let s = String(value)\n    .replace(/\\u00a0/g, \" \")\n    .replace(/руб\\.?|₽/gi, \"\")\n    .replace(/\\s/g, \"\")\n    .trim();\n\n  if (s.includes(\",\") && s.includes(\".\")) {\n    if (s.lastIndexOf(\",\") > s.lastIndexOf(\".\")) {\n      s = s.replace(/\\./g, \"\").replace(\",\", \".\");\n    } else {\n      s = s.replace(/,/g, \"\");\n    }\n  } else if (s.includes(\",\")) {\n    const a = s.split(\",\");\n    s = a.length === 2 && a[1].length !== 3\n      ? s.replace(\",\", \".\")\n      : s.replace(/,/g, \"\");\n  }\n\n  const n = Number(s);\n  return Number.isFinite(n) && n >= 0 ? n : null;\n}\n\nconst records = items.map((item, index) => {\n  const row = item.json || {};\n  const warnings = [];\n\n  const company = pick(row, [\n    \"company_name\", \"company\", \"organization\", \"legal_name\",\n    \"counterparty_name\", \"наименование организации\",\n    \"наименование компании\", \"название организации\",\n    \"название компании\", \"организация\", \"компания\",\n    \"контрагент\", \"инвестор\", \"эмитент\"\n  ]);\n\n  const innRaw = pick(row, [\"inn\", \"инн\", \"tax id\"]);\n  const innDigits = innRaw === null\n    ? \"\"\n    : String(innRaw).replace(/\\D/g, \"\");\n\n  const inn = [10, 12].includes(innDigits.length) ? innDigits : null;\n\n  if (innRaw && !inn) warnings.push(\"inn_requires_review\");\n\n  const fullName = pick(row, [\n    \"full_name\", \"contact_person\", \"person_name\", \"fio\",\n    \"фио\", \"фио контакта\", \"контактное фио\",\n    \"контактное лицо\", \"имя контакта\"\n  ]);\n\n  const position = pick(row, [\n    \"position\", \"job_title\", \"title\", \"должность\",\n    \"должность контакта\", \"позиция\"\n  ]);\n\n  const city = pick(row, [\n    \"city\", \"location\", \"город\", \"регион\", \"местоположение\"\n  ]);\n\n  const email = pick(row, [\n    \"email\", \"emails\", \"e-mail\", \"mail\", \"почта\",\n    \"электронная почта\", \"адрес электронной почты\"\n  ]);\n\n  const phone = pick(row, [\n    \"phone\", \"phones\", \"telephone\", \"mobile\",\n    \"телефон\", \"телефоны\", \"мобильный телефон\",\n    \"контактный телефон\", \"рабочий телефон\"\n  ]);\n\n  const revenueEntry = findEntry(row, [\n    \"revenue_rub\", \"annual_revenue_rub\", \"revenue\",\n    \"annual revenue\", \"выручка\", \"годовая выручка\",\n    \"выручка за год\", \"оборот\",\n    \"выручка млн руб\", \"годовая выручка млн руб\",\n    \"выручка тыс руб\", \"выручка млрд руб\"\n  ]);\n\n  let revenueValue = revenueEntry\n    ? parseNumber(revenueEntry.value)\n    : null;\n\n  const revenueKey = revenueEntry ? norm(revenueEntry.key) : \"\";\n\n  let multiplier = 1;\n\n  if (/млрд|billion/.test(revenueKey)) multiplier = 1000000000;\n  else if (/млн|million/.test(revenueKey)) multiplier = 1000000;\n  else if (/тыс|thousand/.test(revenueKey)) multiplier = 1000;\n\n  if (revenueValue !== null) {\n    revenueValue *= multiplier;\n  }\n\n  if (revenueEntry && revenueValue === null) {\n    warnings.push(\"revenue_requires_review\");\n  }\n\n  const yearRaw = pick(row, [\n    \"revenue_year\", \"год выручки\", \"отчетный год\",\n    \"отчётный год\", \"годовой отчет\"\n  ]);\n\n  const year = yearRaw === null\n    ? null\n    : Number.parseInt(yearRaw, 10);\n\n  const revenueYear =\n    Number.isInteger(year) && year >= 1900 && year <= 2100\n      ? year\n      : null;\n\n  if (yearRaw !== null && revenueYear === null) {\n    warnings.push(\"revenue_year_requires_review\");\n  }\n\n  return {\n    ...row,\n    company_name: company === null ? null : String(company).trim(),\n    inn,\n    city: city === null ? null : String(city).trim(),\n    full_name: fullName === null ? null : String(fullName).trim(),\n    position: position === null ? null : String(position).trim(),\n    email: email === null ? null : String(email).trim(),\n    phone: phone === null ? null : String(phone).trim(),\n    revenue_rub: revenueValue,\n    revenue_year: revenueYear,\n    revenue_source: revenueEntry ? \"document\" : null,\n    source_row: index + 2,\n    source_key: \"row-\" + (index + 2),\n    source_locator: \"row=\" + (index + 2),\n    extraction_warnings: warnings\n  };\n});\n\nreturn records.map(json => ({ json }));\n"
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000021",
+        "name": "Bundle spreadsheet records",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2640,
+          420
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "\nconst records = $input.all().map(x => x.json);\n\nif (!records.length) {\n  throw new Error(\"Нет строк Excel для записи в CRM\");\n}\n\nreturn [{ json: { records } }];\n"
+        },
+        "onError": "continueErrorOutput"
+      },
+      {
+        "id": "GAB2000000000022",
+        "name": "Save spreadsheet records",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          2860,
+          420
+        ],
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "method": "POST",
+          "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $('Claim and normalize').first().json.batch_id + '/rows' }}",
+          "options": {
+            "timeout": 120000
+          },
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({records: $json.records, worker_token: $('Claim and normalize').first().json.worker_token}) }}"
+        },
         "credentials": {
-          "httpHeaderAuth": {
-            "id": "6Wb6WQE64aBvpr95",
-            "name": "GAB OCR API"
+          "httpBasicAuth": {
+            "id": "XXzFWDhFuvZAYPmj",
+            "name": "GAB CRM"
           }
         },
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "GAB2000000000023",
@@ -578,10 +575,7 @@
             "id": "XXzFWDhFuvZAYPmj",
             "name": "GAB CRM"
           }
-        },
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        }
       },
       {
         "id": "6f87045b-1bb5-412f-ae33-e0752c532d44",
@@ -603,7 +597,7 @@
             "conditions": [
               {
                 "id": "6ccc815b-8832-474b-bf2d-f04bd277bfb6",
-                "leftValue": "={{ ['doc','docx','jpg','jpeg','png','tif','tiff','csv','pptx'].includes(String($json.file_extension || '').toLowerCase()) ? 'word' : 'other' }}",
+                "leftValue": "={{ ['doc', 'docx'].includes(String($json.file_extension || '').toLowerCase()) ? 'word' : 'other' }}",
                 "rightValue": "word",
                 "operator": {
                   "type": "string",
@@ -646,10 +640,7 @@
             "name": "GAB CRM"
           }
         },
-        "onError": "continueErrorOutput",
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       },
       {
         "id": "fbc53bb7-1fbe-44b9-a245-2b0de9e73bfb",
@@ -664,7 +655,7 @@
           "authentication": "genericCredentialType",
           "genericAuthType": "httpHeaderAuth",
           "method": "POST",
-          "url": "http://gab_ocr:8000/extract/document-text",
+          "url": "http://gab_ocr:8000/extract/word-text",
           "sendBody": true,
           "contentType": "multipart-form-data",
           "bodyParameters": {
@@ -686,10 +677,7 @@
             "name": "GAB OCR API"
           }
         },
-        "onError": "continueErrorOutput",
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 5000
+        "onError": "continueErrorOutput"
       }
     ],
     "connections": {
@@ -907,7 +895,7 @@
         "main": [
           [
             {
-              "node": "Prepare PDF pages",
+              "node": "Normalize spreadsheet rows",
               "type": "main",
               "index": 0
             }
@@ -961,7 +949,43 @@
         "main": [
           [
             {
-              "node": "Prepare PDF pages",
+              "node": "Normalize spreadsheet rows",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Normalize spreadsheet rows": {
+        "main": [
+          [
+            {
+              "node": "Bundle spreadsheet records",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark batch failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Bundle spreadsheet records": {
+        "main": [
+          [
+            {
+              "node": "Save spreadsheet records",
               "type": "main",
               "index": 0
             }
@@ -1057,26 +1081,6 @@
     "triggerCount": 0,
     "sourceWorkflowId": null,
     "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-11-16T16:33:43.353Z",
-        "createdAt": "2026-11-16T16:33:43.353Z",
-        "role": "workflow:owner",
-        "workflowId": "GAB02InvImp20261",
-        "projectId": "XkDlsaeYuTX2LzRf",
-        "project": {
-          "updatedAt": "2026-10-13T08:50:47.567Z",
-          "createdAt": "2026-10-13T08:14:27.994Z",
-          "id": "XkDlsaeYuTX2LzRf",
-          "name": "Kamil galimovkamil613@gmail.com <galimovkamil613@gmail.com>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "customTelemetryTags": [],
-          "creatorId": "7679d4ec-44a4-4166-814a-f163d3126a71"
-        }
-      }
-    ],
     "versionMetadata": {
       "name": null,
       "description": null

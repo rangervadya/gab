@@ -1,4 +1,6 @@
 BEGIN;
+SET LOCAL lock_timeout = '10s';
+SET LOCAL statement_timeout = '120s';
 ALTER TABLE gab_crm_import_batches ADD COLUMN IF NOT EXISTS worker_token TEXT;
 ALTER TABLE gab_crm_import_batches DROP CONSTRAINT IF EXISTS gab_crm_import_batches_file_extension_check;
 ALTER TABLE gab_crm_import_batches ADD CONSTRAINT gab_crm_import_batches_file_extension_check
