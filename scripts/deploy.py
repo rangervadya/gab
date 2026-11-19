@@ -477,9 +477,8 @@ class Deployment:
             except Exception:errors.append('GAB 02')
         if not errors:
             try:
-                # Earlier CRM may not expose new editor routes; check /health only.
-                self.runner.run(['docker','exec',self.config['crm_container'],'python','-c',
-                    "import os,base64,urllib.request;r=urllib.request.Request('http://127.0.0.1:8000/health');r.add_header('Authorization','Basic '+base64.b64encode((os.environ['GAB_APP_USER']+':'+os.environ['GAB_APP_PASSWORD']).encode()).decode());urllib.request.urlopen(r,timeout=10).read()"])
+                # The previous CRM uses the same authenticated /api/health route.
+                health_check(self.runner,self.config,self.config['crm_container'],'crm-basic')
                 health_check(self.runner,self.config,self.snapshots['ocr']['Name'].lstrip('/'),'ocr')
             except Exception:errors.append('health')
         self.state['status']='rollback-failed' if errors else 'rolled-back';self.save()

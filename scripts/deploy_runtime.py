@@ -205,7 +205,7 @@ class ContainerSwap:
 HEALTH_PROGRAM = r'''
 import base64,json,os,urllib.request
 kind=os.environ['GAB_HEALTH_KIND']
-paths=['/health']
+paths=['/api/health'] if kind in ('crm','crm-basic') else ['/health']
 if kind=='crm': paths += ['/api/mailings/imports?limit=1','/static/crm.css','/static/crm.js','/static/imports.js','/openapi.json']
 if kind=='ocr': paths += ['/openapi.json']
 if kind=='n8n': paths=['/healthz/readiness']
@@ -213,13 +213,15 @@ port='5678' if kind=='n8n' else '8000'
 results={}
 for path in paths:
  req=urllib.request.Request('http://127.0.0.1:'+port+path)
- if kind=='crm':
+ if kind in ('crm','crm-basic'):
   pair=os.environ['GAB_APP_USER']+':'+os.environ['GAB_APP_PASSWORD']
   req.add_header('Authorization','Basic '+base64.b64encode(pair.encode()).decode())
  with urllib.request.urlopen(req,timeout=10) as response:
   data=response.read()
-  if path in ['/health','/openapi.json']: results[path]=json.loads(data)
+  if path in ['/api/health','/health','/openapi.json']: results[path]=json.loads(data)
   elif path.startswith('/static/') and not data: raise RuntimeError('Empty static asset')
+if kind in ('crm','crm-basic'):
+ assert results['/api/health']['status']=='ok'
 if kind=='crm':
  paths=results['/openapi.json']['paths']
  assert 'patch' in paths['/api/mailings/imports/{batch_id}/rows/{row_id}']

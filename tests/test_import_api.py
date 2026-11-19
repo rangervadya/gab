@@ -157,6 +157,33 @@ class ImportApiTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(c.post('/api/mailings/imports', files={'file':(name,data,mime)}).status_code, 422)
 
+    def test_deploy_health_program_uses_real_crm_routes(self):
+        import io
+        import sys
+        from contextlib import redirect_stdout
+        from unittest.mock import patch
+        from urllib.error import HTTPError
+        from urllib.parse import urlsplit
+        scripts=Path(__file__).resolve().parents[1]/'scripts'
+        sys.path.insert(0,str(scripts))
+        from deploy_runtime import HEALTH_PROGRAM
+        visited=[]
+        def open_route(request, timeout):
+            path=urlsplit(request.full_url).path
+            query=urlsplit(request.full_url).query
+            visited.append(path)
+            self.assertIn('Authorization',request.headers)
+            response=self.client.get(path+('?' + query if query else ''))
+            if response.status_code!=200:
+                raise HTTPError(request.full_url,response.status_code,'unexpected health route',{},None)
+            return io.BytesIO(response.content)
+        for kind in ('crm','crm-basic'):
+            with self.subTest(kind=kind),patch.dict(os.environ,{'GAB_HEALTH_KIND':kind}), \
+                 patch('urllib.request.urlopen',side_effect=open_route),redirect_stdout(io.StringIO()):
+                exec(compile(HEALTH_PROGRAM,'deployment-health','exec'),{})
+        self.assertIn('/api/health',visited)
+        self.assertNotIn('/health',visited)
+
     def test_z_reapply_migration_preserves_records_and_indexes(self):
         root=Path(__file__).resolve().parents[1]
         before=self.conn.execute('SELECT id, to_jsonb(r) FROM gab_crm_import_rows r ORDER BY id').fetchall()

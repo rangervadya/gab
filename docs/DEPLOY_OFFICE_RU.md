@@ -58,7 +58,7 @@ bash scripts/deploy-all.sh --check
 7. Снимает с публикации только GAB 02, ждёт применения изменения работающим n8n и повторно проверяет отсутствие обработок. Другие workflow не останавливает.
 8. Применяет `20261119_import_editor.sql` через `psql -X -v ON_ERROR_STOP=1`. В миграции локальные lock/statement timeouts; существующие данные не удаляются. Проверяет новые поля.
 9. Останавливает прежний `gab-review`, переименовывает его в `gab-review-rollback-<release>`, сохраняет его для возврата. Создаёт новый контейнер через локальный Docker Engine API с прежними Config/HostConfig и сетями. Переносит env, port bindings, bind/named/anonymous volumes, user, command, entrypoint, limits, restart/security/logging settings и настроенные aliases/static IP. Динамические endpoint IDs/IP не копируются. Старые network attachments освобождаются перед созданием и восстанавливаются при откате. После запуска сверяет критичные настройки с прежними.
-10. Проверяет защищённый CRM `/health`, чтение импортов, CSS/JS и наличие editor/match-preview/confirm routes. Проверки не редактируют production-строки и не подтверждают импорт.
+10. Проверяет защищённый CRM `/api/health`, чтение импортов, CSS/JS и наличие editor/match-preview/confirm routes. Проверки не редактируют production-строки и не подтверждают импорт.
 11. Импортирует файл ровно с одним ID `GAB02InvImp20261` через `n8n import:workflow --input=...`. Публикует новую версию через `n8n publish:workflow --id=GAB02InvImp20261 --versionId=...`. Не импортирует credentials и не использует `--all` для изменений.
 12. Проверяет не только `activeVersionId` в БД: ждёт фактической `workflow_published_version`, завершения publication outbox и статуса `activated` у schedule trigger новой версии. Проверяет n8n readiness и fingerprints других workflow.
 13. Выводит итог, commit, путь backup, журнал и точную команду отката.
@@ -143,6 +143,8 @@ SQL-миграция аддитивная: при откате образа но
 - Реальный локальный roundtrip backup: pg_dump → pg_restore --list → age encrypt → authenticated decrypt → recovery metadata; неверный ключ отклоняется. Docker-вызовы в этом тесте заменены, PostgreSQL и age настоящие.
 - Изолированные deployment tests: сохранение runtime-параметров и нескольких сетей, static IP и anonymous volume, возврат после create failure, запрет удаления чужого контейнера, failure compensation после каждого этапа, публикация считается успешной только после runtime activation.
 
-Полный локальный прогон: **38 тестов, 37 прошли, 1 пропущен** (локально нет Tesseract; соответствующие изображение/скан и DOC отдельно успешно проверены на рабочем OCR).
+Полный локальный прогон: **39 тестов, 38 прошли, 1 пропущен** (локально нет Tesseract; соответствующие изображение/скан и DOC отдельно успешно проверены на рабочем OCR).
 
 Production deployment, реальное переключение контейнера и создание production-backup **не запускались**. Прогон Docker swap/rollback выполнен на in-memory Docker double; CLI-флаги и фактический сервер проверены отдельно. Первый запуск остаётся операторским, по команде выше.
+
+Исправление health-check: CRM использует `/api/health`, OCR — `/health`. Оба пути проверяются отдельно; rollback использует общий CRM health helper без требования новых editor routes. Добавлен интеграционный тест самого health-программного кода против FastAPI.
