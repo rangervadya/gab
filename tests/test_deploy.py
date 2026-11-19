@@ -280,4 +280,15 @@ class MailSenderValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):credential_document(raw,'another-id')
 
 
+class OcrRollbackHealthTests(unittest.TestCase):
+    def test_old_ocr_version_is_healthy_after_rollback(self):
+        import io,os
+        from deploy_runtime import HEALTH_PROGRAM
+        def response(request,timeout):
+            data={'status':'ok','version':'0.4.4','languages':['rus','eng']} if request.full_url.endswith('/health') else {'paths':{'/extract/text':{},'/extract/word-text':{}}}
+            return io.BytesIO(json.dumps(data).encode())
+        with patch.dict(os.environ,{'GAB_HEALTH_KIND':'ocr-basic','GAB_EXPECTED_OCR_VERSION':'0.4.5'}),patch('urllib.request.urlopen',side_effect=response):
+            exec(compile(HEALTH_PROGRAM,'rollback-health','exec'),{})
+
+
 if __name__=='__main__':unittest.main()

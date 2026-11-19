@@ -12,6 +12,7 @@
     selectedFiles: [],
     uploading: false,
     initialized: false,
+    progressTimer: null,
     query: "",
     offset: 0,
     total: 0,
@@ -53,6 +54,8 @@
     completed: "Завершён",
     failed: "Ошибка"
   })[value] || value || "Неизвестно";
+
+  const batchDisplayStatus = batch => batch.is_cancelled || batch.cancelled_at || String(batch.error_message || "").startsWith("Остановлено пользователем") ? "Остановлено" : batchStatus(batch.status);
 
   const rowStatus = value => ({
     pending: "Ожидает",
@@ -160,7 +163,7 @@
 
       xhr.upload.addEventListener("progress", event => {
         if (event.lengthComputable) {
-          onProgress(Math.round(event.loaded / event.total * 100));
+          onProgress(Math.round(event.loaded / event.total * 100), event.loaded, event.total);
         }
       });
 
@@ -200,7 +203,7 @@
           data-import-batch="${Number(batch.id)}">
           <span class="import-batch-name">${esc(batch.original_filename || batch.folder_name || "Документ")}</span>
           <span class="import-batch-meta">
-            ${esc(batchStatus(batch.status))}
+            ${esc(batchDisplayStatus(batch))}
             · строк: ${Number(batch.actual_rows || 0)}
           </span>
           <span class="import-batch-meta">${dateText(batch.created_at)}</span>
@@ -322,6 +325,7 @@
   }
 
   async function selectBatch(batchId) {
+    clearTimeout(state.progressTimer);
     state.selectedBatchId = Number(batchId);
     state.offset = 0;
     renderBatches();
@@ -337,14 +341,26 @@
         <div>
           <h2>${esc(batch.original_filename || batch.folder_name || "Документ")}</h2>
           <p class="import-muted">
-            ${esc(batchStatus(batch.status))} · ${dateText(batch.created_at)}
+            ${esc(batchDisplayStatus(batch))} · ${dateText(batch.created_at)}
           </p>
         </div>
+        ${["uploaded","processing"].includes(batch.status) ? `<button type="button" class="button secondary" id="importCancelBtn">Остановить документ</button>` : ""}
         ${batch.status === "failed" ? `<button type="button" class="button secondary" id="importRetryBtn">Повторить обработку</button>` : ""}
         <a class="button secondary" target="_blank" rel="noopener"
           href="/api/mailings/imports/${Number(batch.id)}/file">Скачать оригинал</a>
-      </div>`;
+      </div><div id="importProcessingProgress" class="import-processing-progress" role="status" aria-live="polite">Загружаем состояние…</div>`;
 
+    const cancel = $("importCancelBtn");
+    if (cancel) cancel.addEventListener("click", async () => {
+      if (!confirm("Остановить этот документ? Его результат не будет принят. Уже начатый внешний OCR/LLM-запрос может ещё завершаться.")) return;
+      cancel.disabled = true;
+      try {
+        const result = await request(`/api/mailings/imports/${Number(batch.id)}/cancel`, {method:"POST"});
+        notifyImport(result.message || "Документ остановлен");
+        await loadBatches(batch.id);
+      } catch (error) { notifyImport(error.message,true); cancel.disabled = false; }
+    });
+    await refreshProcessingProgress(batch.id);
     const retry = $("importRetryBtn");
     if (retry) retry.addEventListener("click", async () => {
       retry.disabled = true;
@@ -354,6 +370,47 @@
       } catch (error) { notifyImport(error.message, true); retry.disabled = false; }
     });
     await loadRows();
+  }
+
+  function durationText(seconds) {
+    if (!Number.isFinite(seconds)) return "неизвестно";
+    const value = Math.max(0,Math.ceil(seconds));
+    if (value < 60) return `${value} сек.`;
+    if (value < 3600) return `${Math.ceil(value/60)} мин.`;
+    return `${Math.floor(value/3600)} ч. ${Math.ceil(value%3600/60)} мин.`;
+  }
+
+  async function refreshProcessingProgress(batchId) {
+    if (Number(state.selectedBatchId) !== Number(batchId)) return;
+    const area = $("importProcessingProgress");
+    if (!area) return;
+    try {
+      const data = await request(`/api/mailings/imports/${Number(batchId)}/progress`);
+      if (Number(state.selectedBatchId) !== Number(batchId)) return;
+      const stages = {ocr:"Распознавание текста",extract:"Извлечение содержимого",llm:"Извлечение инвесторов Ollama",review:"Готово к проверке",cancelled:"Остановлено",failed:"Ошибка",queued:"В очереди"};
+      const label = data.cancelled ? "Документ остановлен" : data.status === "uploaded" ? "Файл загружен, ожидает очереди" : stages[data.stage] || batchStatus(data.status);
+      const measured = data.status === "processing" && data.total;
+      area.innerHTML = `<strong>${esc(label)}</strong>
+        ${measured ? `<div class="import-stage-progress"><progress max="${Number(data.total)}" value="${Number(data.completed)}"></progress><span>Готово страниц на этапе: ${Number(data.completed)} из ${Number(data.total)} · ${Number(data.percent)}%</span></div>` : ""}
+        ${data.elapsed_seconds !== null ? `<div>Прошло: ${esc(durationText(data.elapsed_seconds))}</div>` : ""}
+        ${data.status === "processing" ? `<div>${data.total && data.completed >= data.total ? "Страницы этого этапа обработаны; ожидаем следующий этап" : data.stage_eta_seconds !== null ? "Примерно осталось на текущем этапе: " + esc(durationText(data.stage_eta_seconds)) : "Оставшееся время пока неизвестно — недостаточно обработанных страниц"}</div><small>OCR и Ollama — разные этапы. Оценка приблизительная и меняется со скоростью обработки.</small>` : ""}
+        ${data.cancelled ? "<p>Результаты больше не принимаются. Уже начатый внешний запрос может ещё завершаться.</p>" : ""}
+        ${data.error ? `<p class="import-error">${esc(data.error)}</p>` : ""}
+        ${data.execution_id ? `<small>Выполнение n8n №${esc(data.execution_id)}</small>` : ""}`;
+      const cancel = $("importCancelBtn");
+      if (cancel) cancel.hidden = !data.can_cancel;
+      const batch = state.batches.find(b => Number(b.id) === Number(batchId));
+      const changed = batch && batch.status !== data.status;
+      if (batch) { batch.status = data.status; batch.is_cancelled = data.cancelled; renderBatches(); }
+      if (changed && ["review","ready","completed"].includes(data.status)) await loadRows();
+      if (["uploaded","processing"].includes(data.status) && !$("importsView").hidden) {
+        state.progressTimer = setTimeout(() => refreshProcessingProgress(batchId),3000);
+      }
+    } catch (error) {
+      if (Number(state.selectedBatchId) !== Number(batchId)) return;
+      area.textContent = "Не удалось обновить прогресс: " + error.message;
+      if (!$("importsView").hidden) state.progressTimer = setTimeout(() => refreshProcessingProgress(batchId),5000);
+    }
   }
 
   async function loadBatches(preferredId = null) {
@@ -604,10 +661,17 @@
       $("importProgressText").textContent =
         `Загружаем ${i + 1} из ${files.length}: ${file.name}`;
 
+      const uploadStarted = performance.now();
+      const bytesBefore = files.slice(0,i).reduce((sum,item) => sum+item.size,0);
+      const totalBytes = files.reduce((sum,item) => sum+item.size,0);
       try {
-        const result = await uploadOne(file, folder, percent => {
-          const total = Math.round(((i + percent / 100) / files.length) * 100);
+        const result = await uploadOne(file, folder, (percent,loaded,eventTotal) => {
+          const bytesLoaded = Math.min(file.size,file.size*loaded/eventTotal);
+          const total = Math.round((bytesBefore+bytesLoaded)/totalBytes*100);
           $("importProgressBar").style.width = total + "%";
+          const elapsed = (performance.now()-uploadStarted)/1000;
+          const eta = elapsed >= 1 && loaded > 0 ? (eventTotal-loaded)/(loaded/elapsed) : null;
+          $("importProgressText").textContent = `Файл ${i+1} из ${files.length}: ${file.name} · ${percent}% · ${(bytesLoaded/1024/1024).toFixed(1)} из ${(file.size/1024/1024).toFixed(1)} МиБ · ${eta !== null ? "осталось примерно " + durationText(eta) : "оцениваем скорость…"}${percent === 100 ? " · ожидаем сохранения сервером" : ""}`;
         });
 
         const id = result.item && result.item.id;

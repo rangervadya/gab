@@ -13,6 +13,10 @@ text_spec = importlib.util.spec_from_file_location('document_text', OCR_DIR / 'd
 text_module = importlib.util.module_from_spec(text_spec)
 text_spec.loader.exec_module(text_module)
 sys.modules['document_text'] = text_module
+progress_spec=importlib.util.spec_from_file_location('progress', OCR_DIR/'progress.py')
+progress_module=importlib.util.module_from_spec(progress_spec)
+progress_spec.loader.exec_module(progress_module)
+sys.modules['progress']=progress_module
 
 
 class DocumentTests(unittest.TestCase):
@@ -86,6 +90,31 @@ class DocumentTests(unittest.TestCase):
             self.assertEqual(response.status_code,422)
         response=self.client.post('/extract/document-text',files={'file':('bad.doc',b'corrupt')},headers={'X-API-Key':'synthetic-token'})
         self.assertIn(response.status_code,(422,503))
+
+    def test_tracked_ollama_preserves_response_without_live_model(self):
+        from unittest.mock import patch,MagicMock
+        response=MagicMock();response.__enter__.return_value=response
+        # Construct JSON with the same message.content contract as Ollama.
+        import json
+        response.read.return_value=json.dumps({'message':{'content':'{"records":[]}'},'done':True}).encode()
+        with patch('progress.Reporter.report') as report,patch('urllib.request.urlopen',return_value=response) as opener:
+            result=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json={
+                'batch_id':1,'worker_token':'a'*32,'source_page':1,'pages_total':2,
+                'ollama_request':{'model':'synthetic','stream':False,'messages':[]}})
+            self.assertEqual(result.status_code,200,result.text)
+            self.assertEqual(result.json()['message']['content'],'{"records":[]}')
+            self.assertEqual(report.call_args_list[-1].args,('llm',2,1))
+            self.assertEqual(opener.call_args.args[0].full_url,'http://ollama_ai:11434/api/chat')
+
+    def test_cancelled_document_never_reaches_ollama(self):
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        with patch('progress.Reporter.report',side_effect=HTTPException(409,'cancelled')),patch('urllib.request.urlopen') as opener:
+            result=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json={
+                'batch_id':1,'worker_token':'a'*32,'source_page':1,'pages_total':2,
+                'ollama_request':{'model':'synthetic','stream':False,'messages':[]}})
+            self.assertEqual(result.status_code,409)
+            opener.assert_not_called()
 
     @unittest.skipUnless(shutil.which('tesseract'), 'Tesseract rus+eng is required for real OCR tests')
     def test_image_and_scanned_pdf(self):

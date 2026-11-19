@@ -26,7 +26,7 @@ COPY requirements.txt ./requirements.txt
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-COPY app.py document_text.py ./
+COPY app.py document_text.py progress.py ./
 
 EXPOSE 8000
 

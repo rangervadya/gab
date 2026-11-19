@@ -1,3 +1,5 @@
+> Прогресс загрузки/распознавания и остановка документа: [docs/IMPORT_PROGRESS_RU.md](docs/IMPORT_PROGRESS_RU.md).
+
 > Ручная массовая отправка: установка без писем и порядок запуска сотрудником — [docs/MASS_MAILING_RU.md](docs/MASS_MAILING_RU.md).
 
 > Офисный сервер: единая команда обновления, аудит фактической конфигурации и rollback — [docs/DEPLOY_OFFICE_RU.md](docs/DEPLOY_OFFICE_RU.md).

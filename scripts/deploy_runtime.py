@@ -207,7 +207,7 @@ import base64,json,os,urllib.request
 kind=os.environ['GAB_HEALTH_KIND']
 paths=['/api/health'] if kind in ('crm','crm-basic') else ['/health']
 if kind=='crm': paths += ['/api/mailings/imports?limit=1','/static/crm.css','/static/crm.js','/static/imports.js','/openapi.json']
-if kind=='ocr': paths += ['/openapi.json']
+if kind in ('ocr','ocr-basic'): paths += ['/openapi.json']
 if kind=='n8n': paths=['/healthz/readiness']
 port='5678' if kind=='n8n' else '8000'
 results={}
@@ -229,10 +229,13 @@ if kind=='crm':
  assert 'post' in paths['/api/mailings/imports/{batch_id}/rows/{row_id}/confirm']
  assert 'post' in paths['/api/mailings/{mailing_id}/bulk-preview']
  assert 'post' in paths['/api/mailings/{mailing_id}/bulk-send']
-if kind=='ocr':
- assert results['/health']['version']==os.environ['GAB_EXPECTED_OCR_VERSION']
+if kind in ('ocr','ocr-basic'):
+ assert results['/health']['status']=='ok'
  assert {'rus','eng'} <= set(results['/health']['languages'])
  assert {'/extract/text','/extract/word-text'} <= set(results['/openapi.json']['paths'])
+if kind=='ocr':
+ assert results['/health']['version']==os.environ['GAB_EXPECTED_OCR_VERSION']
+ assert '/ollama/chat' in results['/openapi.json']['paths']
 print('ok')
 '''
 

@@ -95,7 +95,11 @@
           "url": "={{ 'http://gab-review:8000/api/mailings/imports/' + $json.batch_id + '/claim' }}",
           "options": {
             "timeout": 120000
-          }
+          },
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({execution_id: String($execution.id)}) }}"
         },
         "credentials": {
           "httpBasicAuth": {
@@ -206,6 +210,14 @@
                 "parameterType": "formBinaryData",
                 "name": "file",
                 "inputDataFieldName": "data"
+              },
+              {
+                "name": "batch_id",
+                "value": "={{ $('Claim and normalize').first().json.batch_id }}"
+              },
+              {
+                "name": "worker_token",
+                "value": "={{ $('Claim and normalize').first().json.worker_token }}"
               }
             ]
           },
@@ -233,7 +245,7 @@
         "parameters": {
           "mode": "runOnceForAllItems",
           "language": "javaScript",
-          "jsCode": "\nconst root = $input.first()?.json || {};\n\nif (!root.ok || !Array.isArray(root.pages)) {\n  throw new Error(\"OCR не вернул корректный массив pages\");\n}\n\nconst batchId = $(\"Claim and normalize\").first().json.batch_id;\n\nconst schema = {\n  type: \"object\",\n  additionalProperties: false,\n  properties: {\n    records: {\n      type: \"array\",\n      items: {\n        type: \"object\",\n        additionalProperties: false,\n        properties: {\n          company_name: {type: [\"string\", \"null\"]},\n          inn: {type: [\"string\", \"null\"]},\n          city: {type: [\"string\", \"null\"]},\n          full_name: {type: [\"string\", \"null\"]},\n          position: {type: [\"string\", \"null\"]},\n          email: {type: [\"string\", \"null\"]},\n          phone: {type: [\"string\", \"null\"]},\n          emails: {type: \"array\", items: {type: \"string\"}},\n          phones: {type: \"array\", items: {type: \"string\"}},\n          revenue_rub: {type: [\"number\", \"null\"]},\n          revenue_year: {type: [\"integer\", \"null\"]},\n          source_row: {type: [\"integer\", \"null\"]},\n          warnings: {type: \"array\", items: {type: \"string\"}}\n        },\n        required: [\n          \"company_name\", \"inn\", \"city\", \"full_name\", \"position\",\n          \"email\", \"phone\", \"emails\", \"phones\", \"revenue_rub\",\n          \"revenue_year\", \"source_row\", \"warnings\"\n        ]\n      }\n    }\n  },\n  required: [\"records\"]\n};\n\nconst systemPrompt =\n  \"Ты извлекаешь сведения об инвесторах и компаниях из русскоязычных документов. \" +\n  \"Извлеки ВСЕ отдельные компании и контакты, которые явно указаны на странице. \" +\n  \"Не объединяй разные компании. Не выдумывай ИНН, телефоны, email, город или выручку. \" +\n  \"Сохраняй все найденные email и телефоны в массивах. \" +\n  \"ИНН — только 10 или 12 цифр, если он полностью читается. \" +\n  \"Выручку записывай числом в рублях только если сумма и единицы однозначны. \" +\n  \"При неоднозначности оставляй null и добавляй предупреждение. \" +\n  \"Не включай заголовки и рекламные фрагменты. Строго соблюдай JSON Schema.\";\n\nconst result = root.pages.map((p, i) => {\n  const page = {\n    batch_id: batchId,\n    source_page: Number(p.page) || i + 1,\n    page_text: String(p.raw_text || \"\"),\n    needs_review: Boolean(p.needs_review),\n    ocr_error: p.ocr_error || null\n  };\n\n  return {\n    json: {\n      ...page,\n      ollama_request: {\n        model: \"qwen2.5:7b\",\n        stream: false,\n        format: schema,\n        options: {\n          temperature: 0,\n          num_ctx: 16384,\n          num_predict: 6000\n        },\n        messages: [\n          {role: \"system\", content: systemPrompt},\n          {\n            role: \"user\",\n            content:\n              \"Извлеки все записи инвесторов и компаний с этой страницы. \" +\n              \"Не объединяй разные контакты. Сохраняй порядок появления. \" +\n              \"Текст страницы с номером: \" +\n              String(page.source_page) + \"\\n\" + page.page_text\n          }\n        ]\n      }\n    }\n  };\n});\n\nif (!result.length) {\n  throw new Error(\"В PDF нет страниц\");\n}\n\nif (result.every(x => !x.json.page_text.trim())) {\n  throw new Error(\"OCR не извлёк текст ни с одной страницы\");\n}\n\nreturn result;\n"
+          "jsCode": "\nconst root = $input.first()?.json || {};\n\nif (!root.ok || !Array.isArray(root.pages)) {\n  throw new Error(\"OCR не вернул корректный массив pages\");\n}\n\nconst batchId = $(\"Claim and normalize\").first().json.batch_id;\n\nconst schema = {\n  type: \"object\",\n  additionalProperties: false,\n  properties: {\n    records: {\n      type: \"array\",\n      items: {\n        type: \"object\",\n        additionalProperties: false,\n        properties: {\n          company_name: {type: [\"string\", \"null\"]},\n          inn: {type: [\"string\", \"null\"]},\n          city: {type: [\"string\", \"null\"]},\n          full_name: {type: [\"string\", \"null\"]},\n          position: {type: [\"string\", \"null\"]},\n          email: {type: [\"string\", \"null\"]},\n          phone: {type: [\"string\", \"null\"]},\n          emails: {type: \"array\", items: {type: \"string\"}},\n          phones: {type: \"array\", items: {type: \"string\"}},\n          revenue_rub: {type: [\"number\", \"null\"]},\n          revenue_year: {type: [\"integer\", \"null\"]},\n          source_row: {type: [\"integer\", \"null\"]},\n          warnings: {type: \"array\", items: {type: \"string\"}}\n        },\n        required: [\n          \"company_name\", \"inn\", \"city\", \"full_name\", \"position\",\n          \"email\", \"phone\", \"emails\", \"phones\", \"revenue_rub\",\n          \"revenue_year\", \"source_row\", \"warnings\"\n        ]\n      }\n    }\n  },\n  required: [\"records\"]\n};\n\nconst systemPrompt =\n  \"Ты извлекаешь сведения об инвесторах и компаниях из русскоязычных документов. \" +\n  \"Извлеки ВСЕ отдельные компании и контакты, которые явно указаны на странице. \" +\n  \"Не объединяй разные компании. Не выдумывай ИНН, телефоны, email, город или выручку. \" +\n  \"Сохраняй все найденные email и телефоны в массивах. \" +\n  \"ИНН — только 10 или 12 цифр, если он полностью читается. \" +\n  \"Выручку записывай числом в рублях только если сумма и единицы однозначны. \" +\n  \"При неоднозначности оставляй null и добавляй предупреждение. \" +\n  \"Не включай заголовки и рекламные фрагменты. Строго соблюдай JSON Schema.\";\n\nconst result = root.pages.map((p, i) => {\n  const page = {\n    batch_id: batchId,\n    pages_total: root.pages.length,\n    source_page: Number(p.page) || i + 1,\n    page_text: String(p.raw_text || \"\"),\n    needs_review: Boolean(p.needs_review),\n    ocr_error: p.ocr_error || null\n  };\n\n  return {\n    json: {\n      ...page,\n      ollama_request: {\n        model: \"qwen2.5:7b\",\n        stream: false,\n        format: schema,\n        options: {\n          temperature: 0,\n          num_ctx: 16384,\n          num_predict: 6000\n        },\n        messages: [\n          {role: \"system\", content: systemPrompt},\n          {\n            role: \"user\",\n            content:\n              \"Извлеки все записи инвесторов и компаний с этой страницы. \" +\n              \"Не объединяй разные контакты. Сохраняй порядок появления. \" +\n              \"Текст страницы с номером: \" +\n              String(page.source_page) + \"\\n\" + page.page_text\n          }\n        ]\n      }\n    }\n  };\n});\n\nif (!result.length) {\n  throw new Error(\"В PDF нет страниц\");\n}\n\nif (result.every(x => !x.json.page_text.trim())) {\n  throw new Error(\"OCR не извлёк текст ни с одной страницы\");\n}\n\nreturn result;\n"
         },
         "onError": "continueErrorOutput"
       },
@@ -248,16 +260,24 @@
         ],
         "parameters": {
           "method": "POST",
-          "url": "http://ollama_ai:11434/api/chat",
+          "url": "http://gab_ocr:8000/ollama/chat",
           "sendBody": true,
           "contentType": "json",
           "specifyBody": "json",
-          "jsonBody": "={{ JSON.stringify($json.ollama_request) }}",
+          "jsonBody": "={{ JSON.stringify({batch_id:$json.batch_id, worker_token:$('Claim and normalize').first().json.worker_token, source_page:$json.source_page, pages_total:$json.pages_total, ollama_request:$json.ollama_request}) }}",
           "options": {
             "timeout": 1800000
-          }
+          },
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth"
         },
-        "onError": "continueErrorOutput"
+        "onError": "continueErrorOutput",
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "6Wb6WQE64aBvpr95",
+            "name": "GAB OCR API"
+          }
+        }
       },
       {
         "id": "GAB2000000000012",
@@ -664,6 +684,14 @@
                 "parameterType": "formBinaryData",
                 "name": "file",
                 "inputDataFieldName": "data"
+              },
+              {
+                "name": "batch_id",
+                "value": "={{ $('Claim and normalize').first().json.batch_id }}"
+              },
+              {
+                "name": "worker_token",
+                "value": "={{ $('Claim and normalize').first().json.worker_token }}"
               }
             ]
           },

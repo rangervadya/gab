@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import io
 import zipfile
 import subprocess
@@ -17,11 +18,11 @@ import cv2
 import fitz
 import numpy as np
 import pytesseract
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pytesseract import Output
 
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.4"
+APP_VERSION = "0.4.5"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))
@@ -672,9 +673,13 @@ def health() -> dict[str, Any]:
 def extract_pdf_text(
     file: UploadFile = File(...),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    batch_id: int | None = Form(default=None),
+    worker_token: str | None = Form(default=None),
 ) -> dict[str, Any]:
     """Layout-independent PDF text extraction for investor databases."""
     require_token(x_api_key)
+    from progress import Reporter
+    reporter=Reporter(batch_id,worker_token)
 
     filename = Path(file.filename or "upload.pdf").name
     if Path(filename).suffix.lower() != ".pdf":
@@ -711,6 +716,7 @@ def extract_pdf_text(
         with fitz.open(temp_path) as document:
             if document.page_count > 200 or document.is_encrypted:
                 raise HTTPException(422, "PDF превышает лимит 200 страниц или зашифрован")
+            reporter.report("ocr",document.page_count)
             for index, page in enumerate(document):
                 embedded_text = (page.get_text("text") or "").strip()
                 has_images = bool(page.get_images(full=True))
@@ -772,6 +778,7 @@ def extract_pdf_text(
                     "needs_review": not bool(raw_text) or bool(ocr_error),
                     "ocr_error": ocr_error,
                 })
+                reporter.report("ocr",document.page_count,index+1)
 
         return {
             "ok": True,
@@ -812,9 +819,14 @@ def extract_pdf_text(
 def extract_word_text(
     file: UploadFile = File(...),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    batch_id: int | None = Form(default=None),
+    worker_token: str | None = Form(default=None),
 ) -> dict[str, Any]:
     """Extract text and tables from DOCX/DOC for the investor import workflow."""
     require_token(x_api_key)
+    from progress import Reporter
+    reporter=Reporter(batch_id,worker_token)
+    reporter.report("extract",1)
 
     filename = Path(file.filename or "upload.docx").name
     extension = Path(filename).suffix.lower()
@@ -954,6 +966,7 @@ def extract_word_text(
                 detail="No text or tables found in Word document",
             )
 
+        reporter.report("extract",1,1)
         page = {
             "page": 1,
             "text_method": method,
@@ -1083,9 +1096,9 @@ def extract_universal_text(file: UploadFile = File(...),
     require_token(x_api_key)
     extension = Path(file.filename or '').suffix.lower()
     if extension in {'.doc', '.docx'}:
-        return extract_word_text(file, x_api_key)
+        return extract_word_text(file, x_api_key, None, None)
     if extension == '.pdf':
-        return extract_pdf_text(file, x_api_key)
+        return extract_pdf_text(file, x_api_key, None, None)
     from document_text import extract_document
     content = file.file.read(MAX_FILE_MB * 1024 * 1024 + 1)
     file.file.close()
@@ -1102,3 +1115,34 @@ def extract_universal_text(file: UploadFile = File(...),
         return extract_document(content, Path(file.filename).name)
     except Exception as exc:
         raise HTTPException(422, f'Документ не обработан: {type(exc).__name__}') from exc
+
+
+@app.post('/ollama/chat')
+def tracked_ollama_chat(body: dict, x_api_key: str | None = Header(default=None, alias='X-API-Key')):
+    """Forward the existing n8n Ollama request unchanged; report real completions."""
+    require_token(x_api_key)
+    import urllib.request
+    from progress import Reporter
+    batch_id=body.get('batch_id');token=body.get('worker_token')
+    page=body.get('source_page');total=body.get('pages_total')
+    request_body=body.get('ollama_request')
+    if type(page) is not int or type(total) is not int or not 1<=page<=total<=200 or not isinstance(request_body,dict):
+        raise HTTPException(422,'Некорректный запрос страницы')
+    if type(batch_id) is not int or not isinstance(token,str) or len(token)!=32:
+        raise HTTPException(422,'Необходим worker token документа')
+    if request_body.get('stream') is not False:
+        raise HTTPException(422,'Требуется существующий нестриминговый запрос Ollama')
+    raw=json.dumps(request_body,ensure_ascii=False).encode()
+    if len(raw)>2*1024*1024:raise HTTPException(413,'Запрос страницы слишком большой')
+    reporter=Reporter(batch_id,token)
+    reporter.report('llm',total,require_active=True)
+    req=urllib.request.Request('http://ollama_ai:11434/api/chat',data=raw,headers={'Content-Type':'application/json'},method='POST')
+    try:
+        with urllib.request.urlopen(req,timeout=1800) as response:
+            result=json.loads(response.read(5*1024*1024))
+    except Exception as exc:
+        raise HTTPException(502,'Ollama не завершила страницу: '+type(exc).__name__) from None
+    if not isinstance(result,dict) or not isinstance(result.get('message',{}).get('content'),str):
+        raise HTTPException(502,'Ollama не вернула структурированный ответ')
+    reporter.report('llm',total,page)
+    return result

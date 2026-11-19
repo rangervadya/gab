@@ -1,4 +1,5 @@
 import hmac
+import re
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ from app.lead_intake import router as lead_intake_router
 from app.notifications_api import router as notifications_router
 from app.mailings_api import router as mailings_router
 from app.mailing_bulk import router as bulk_mailings_router
+from app.import_progress import router as import_progress_router
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -30,6 +32,10 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not APP_USER or not APP_PASSWORD:
             return JSONResponse({"detail": "GAB_APP_USER and GAB_APP_PASSWORD must be configured"}, status_code=503)
+        # Only this narrowly scoped callback accepts a batch capability token.
+        # The endpoint validates it against that processing batch in PostgreSQL.
+        if request.method == "POST" and re.fullmatch(r"/api/mailings/imports/[0-9]+/progress",request.url.path) and request.headers.get("x-gab-worker-token"):
+            return await call_next(request)
         auth = request.headers.get("authorization", "")
         try:
             scheme, encoded = auth.split(" ", 1)
@@ -182,5 +188,6 @@ def update_record(record_id: str, body: ReviewUpdate):
 app.include_router(notifications_router)
 app.include_router(mailings_router)
 app.include_router(bulk_mailings_router)
+app.include_router(import_progress_router)
 app.include_router(crm_router)
 app.include_router(lead_intake_router)

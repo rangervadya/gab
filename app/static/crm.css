@@ -391,3 +391,6 @@ dialog::backdrop { background: #101d2b88; }
 .import-raw { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; }
 #importConfirmForm { display: grid; gap: 12px; }
 .import-ack { display: flex; align-items: flex-start; gap: 8px; overflow-wrap: anywhere; }
+.import-processing-progress { margin: 14px 0; padding: 12px; background: #f3f6f9; border-radius: 8px; line-height: 1.6; overflow-wrap: anywhere; }
+.import-stage-progress { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.import-stage-progress progress { width: min(320px,100%); height: 16px; accent-color: #315778; }

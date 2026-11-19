@@ -22,7 +22,7 @@ class ImportApiTests(unittest.TestCase):
         for path in ['app/schema.sql', 'app/schema_crm.sql', 'app/schema_mailings.sql', 'app/schema_notifications.sql',
                      'migrations/20261116_investor_import.sql', 'migrations/20261115_import_enrichment.sql',
                      'migrations/20261118_contacts_import_audit.sql', 'migrations/20261119_import_editor.sql',
-                     'migrations/20261119_import_editor.sql']:
+                     'migrations/20261119_import_editor.sql', 'migrations/20261119_import_progress.sql']:
             cls.conn.execute((root / path).read_text())
         os.environ['DATABASE_URL'] = URL
         os.environ['GAB_APP_USER'] = 'synthetic-reviewer'
@@ -140,6 +140,36 @@ class ImportApiTests(unittest.TestCase):
                     self.assertEqual(data['suggested_company_id'],company)
                 else:
                     self.assertIn(contact,[item['id'] for item in data['contact_candidates']])
+
+    def test_progress_callback_and_cancellation_fence(self):
+        c=self.client;base='/api/mailings/imports'
+        batch=c.post(base,files={'file':('synthetic-progress.pdf',b'%PDF-1.4 synthetic','application/pdf')}).json()['item']['id']
+        url=f'{base}/{batch}'
+        claim=c.post(url+'/claim',json={'execution_id':'125'}).json()
+        token=claim['item']['worker_token']
+        headers={'X-GAB-Worker-Token':token}
+        self.assertEqual(c.get(url+'/progress',auth=None).status_code,401)
+        self.assertEqual(c.post(url+'/cancel',headers=headers,auth=None).status_code,401)
+        self.assertEqual(c.post(url+'/progress',json={'stage':'ocr','total':3,'page_completed':1},headers={'X-GAB-Worker-Token':'0'*32},auth=None).status_code,409)
+        for page,done in [(2,1),(2,1),(1,2)]:
+            response=c.post(url+'/progress',json={'stage':'ocr','total':3,'page_completed':page},headers=headers,auth=None)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.json()['completed'],done)
+        self.assertEqual(c.get(url+'/progress').json()['execution_id'],'125')
+        self.assertTrue(c.post(url+'/cancel').json()['cancelled'])
+        self.assertTrue(c.post(url+'/cancel').json()['already_cancelled'])
+        self.assertEqual(c.post(url+'/progress',json={'stage':'llm','total':3},headers=headers,auth=None).status_code,409)
+        self.assertEqual(c.post(url+'/rows',json={'worker_token':token,'records':[{'company_name':'Late synthetic'}]}).status_code,409)
+        self.assertEqual(c.get(url+'/file').content,b'%PDF-1.4 synthetic')
+        self.assertEqual(self.conn.execute('SELECT count(*) FROM gab_crm_import_batch_events WHERE batch_id=%s',[batch]).fetchone()[0],1)
+
+    def test_progress_finished_document_cannot_be_cancelled(self):
+        c=self.client
+        batch=c.post('/api/mailings/imports',files={'file':('finished.pdf',b'%PDF-1.4 synthetic','application/pdf')}).json()['item']['id']
+        url=f'/api/mailings/imports/{batch}';token=c.post(url+'/claim').json()['item']['worker_token']
+        c.post(url+'/rows',json={'worker_token':token,'records':[{'company_name':'Synthetic completed'}]})
+        self.assertEqual(c.post(url+'/cancel').status_code,409)
+        self.assertEqual(c.get(url+'/progress').json()['status'],'review')
 
     def test_retry_invalidates_worker(self):
         c = self.client

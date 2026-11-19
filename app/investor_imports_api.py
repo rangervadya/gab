@@ -176,7 +176,10 @@ def get_import_batch(batch_id: int):
 
 
 @router.post("/{batch_id}/claim")
-def claim_import_batch(batch_id: int):
+def claim_import_batch(batch_id: int, body: dict | None = None):
+    execution_id = str((body or {}).get("execution_id") or "")
+    if execution_id and not re.fullmatch(r"[0-9]{1,30}",execution_id):
+        raise HTTPException(422,"Некорректный execution ID")
     with get_conn() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('gab-import-capacity', 0))")
         busy = conn.execute("SELECT COUNT(*) AS count FROM gab_crm_import_batches WHERE status='processing'").fetchone()['count']
@@ -187,12 +190,15 @@ def claim_import_batch(batch_id: int):
             UPDATE gab_crm_import_batches
             SET status = 'processing',
                 worker_token = %s,
+                n8n_execution_id = %s, processing_started_at=now(), processing_finished_at=NULL,
+                progress_stage='extract',stage_started_at=now(),progress_total=NULL,progress_pages='[]'::jsonb,
+                progress_updated_at=now(),cancelled_at=NULL,
                 error_message = NULL,
                 updated_at = now()
             WHERE id = %s AND status = 'uploaded'
             RETURNING *
             """,
-            [uuid.uuid4().hex, batch_id],
+            [uuid.uuid4().hex, execution_id or None, batch_id],
         ).fetchone()
 
         if row:
@@ -224,6 +230,7 @@ def fail_import_batch(batch_id: int, body: dict):
             """
             UPDATE gab_crm_import_batches
             SET status = 'failed',
+                progress_stage='failed',processing_finished_at=now(),
                 error_message = %s,
                 updated_at = now()
             WHERE id = %s AND status = 'processing' AND worker_token = %s
@@ -879,6 +886,7 @@ def ingest_import_rows(batch_id: int, body: dict):
             """
             UPDATE gab_crm_import_batches
             SET status = 'review',
+                progress_stage='review',processing_finished_at=now(),
                 total_rows = %s,
                 eligible_rows = %s,
                 without_email_rows = %s,
@@ -967,7 +975,7 @@ def import_edit_history(batch_id: int, row_id: int):
 def retry_import_batch(batch_id: int):
     with get_conn() as conn:
         row = conn.execute(
-            """UPDATE gab_crm_import_batches SET status='uploaded', worker_token=NULL, error_message=NULL, updated_at=now()
+            """UPDATE gab_crm_import_batches SET status='uploaded', worker_token=NULL, error_message=NULL, cancelled_at=NULL,processing_started_at=NULL,processing_finished_at=NULL,progress_stage='queued',progress_pages='[]'::jsonb,progress_total=NULL,progress_updated_at=NULL,updated_at=now()
                WHERE id=%s AND status='failed' RETURNING *""", [batch_id],
         ).fetchone()
         if not row:

@@ -34,7 +34,7 @@ HTTP_ROUTES = {
     'List uploaded batches': 'http://gab-review:8000/api/mailings/imports?status=uploaded&limit=20',
     'OCR PDF': 'http://gab_ocr:8000/extract/text',
     'OCR Word': 'http://gab_ocr:8000/extract/word-text',
-    'Ollama extract investors': 'http://ollama_ai:11434/api/chat',
+    'Ollama extract investors': 'http://gab_ocr:8000/ollama/chat',
 }
 for name, suffix in [('Claim batch','claim'),('Download PDF','file'),('Download XLSX','file'),
                      ('Download XLS','file'),('Download Word','file')]:

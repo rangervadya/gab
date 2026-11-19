@@ -255,7 +255,8 @@ class Deployment:
         if len(self.previous.get('nodes',[])) != 27:
             raise DeployError('Live GAB 02 does not have the audited 27 nodes')
         self.before_other = fingerprint(self.all_workflows)
-        if component=='mailings':self.verify_mail_sender()
+        if component=='mailings' or (component=='all' and environment(self.snapshots['crm']).get('GAB_MAILING_WEBHOOK_URL')):
+            self.verify_mail_sender()
         # Fail before database/container changes if runtime compatibility is bad.
         health_check(self.runner,self.config,self.config['n8n_container'],'n8n',retries=False)
         if component == 'workflow':
@@ -420,7 +421,7 @@ class Deployment:
 
     def migrate(self):
         log('Applying idempotent import-editor migration…')
-        for migration in ('20261119_import_editor.sql','20261119_bulk_mailing.sql'):
+        for migration in ('20261119_import_editor.sql','20261119_bulk_mailing.sql','20261119_import_progress.sql'):
             self.sql(None,data=(ROOT/'migrations'/migration).read_bytes())
         found=self.sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='gab_crm_import_rows' AND column_name IN ('manual_overrides','edit_version')")
         if found!='2':raise DeployError('Editor migration postcondition failed')
@@ -520,7 +521,7 @@ class Deployment:
             try:
                 # The previous CRM uses the same authenticated /api/health route.
                 health_check(self.runner,self.config,self.config['crm_container'],'crm-basic')
-                health_check(self.runner,self.config,self.snapshots['ocr']['Name'].lstrip('/'),'ocr')
+                health_check(self.runner,self.config,self.snapshots['ocr']['Name'].lstrip('/'),'ocr-basic')
             except Exception:errors.append('health')
         self.state['status']='rollback-failed' if errors else 'rolled-back';self.save()
         if errors:raise DeployError('Rollback needs operator attention: '+', '.join(errors))
