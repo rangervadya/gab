@@ -1,6 +1,7 @@
 """User cancellation and capability-scoped OCR/LLM page progress."""
 from datetime import datetime,timezone
 import hmac
+import json
 import math
 import os
 from typing import Literal
@@ -16,6 +17,39 @@ class PageProgress(BaseModel):
     stage:Literal['ocr','extract','llm']
     total:int=Field(ge=1,le=200)
     page_completed:int|None=Field(default=None,ge=1,le=200)
+
+
+class PageResult(BaseModel):
+    source_page:int=Field(ge=1,le=200)
+    request_hash:str=Field(pattern=r'^[a-f0-9]{64}$')
+    result:dict|None=None
+
+
+@router.post('/{batch_id}/page-result')
+def page_result(batch_id:int,body:PageResult,x_gab_worker_token:str=Header(min_length=32,max_length=128)):
+    # The batch row lock fences cancellation/retry against both cache reads and
+    # writes. Results survive retry, but are reusable only for identical input.
+    with get_conn() as conn:
+        row=conn.execute('SELECT status,worker_token FROM gab_crm_import_batches WHERE id=%s FOR UPDATE',[batch_id]).fetchone()
+        if not row or row['status']!='processing' or not hmac.compare_digest(str(row.get('worker_token') or ''),x_gab_worker_token):
+            raise HTTPException(409,'Обработка остановлена или token устарел')
+        if body.result is not None:
+            if len(json.dumps(body.result).encode())>5*1024*1024:
+                raise HTTPException(413,'Ответ страницы слишком большой')
+            try:
+                content=body.result['message']['content']
+                parsed=json.loads(content)
+                if body.result.get('done') is not True or body.result.get('done_reason')=='length' or not isinstance(parsed.get('records'),list):
+                    raise ValueError()
+            except (KeyError,TypeError,ValueError,AttributeError):
+                raise HTTPException(422,'Страница не содержит завершённый JSON records') from None
+            conn.execute('''INSERT INTO gab_crm_import_page_results(batch_id,source_page,request_hash,result_json)
+                VALUES (%s,%s,%s,%s) ON CONFLICT(batch_id,source_page) DO UPDATE SET
+                request_hash=excluded.request_hash,result_json=excluded.result_json,created_at=now()''',
+                [batch_id,body.source_page,body.request_hash,Jsonb(body.result)])
+        cached=conn.execute('SELECT result_json FROM gab_crm_import_page_results WHERE batch_id=%s AND source_page=%s AND request_hash=%s',
+                           [batch_id,body.source_page,body.request_hash]).fetchone()
+    return {'result':cached['result_json'] if cached else None}
 
 
 def progress_view(row):

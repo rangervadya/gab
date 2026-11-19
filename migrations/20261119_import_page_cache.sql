@@ -1,0 +1,13 @@
+BEGIN;
+SET LOCAL lock_timeout='10s';
+SET LOCAL statement_timeout='120s';
+CREATE TABLE IF NOT EXISTS gab_crm_import_page_results (
+ batch_id BIGINT NOT NULL REFERENCES gab_crm_import_batches(id),
+ source_page INTEGER NOT NULL CHECK (source_page BETWEEN 1 AND 200),
+ request_hash TEXT NOT NULL CHECK (request_hash ~ '^[a-f0-9]{64}$'),
+ result_json JSONB NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(batch_id,source_page)
+);
+GRANT SELECT,INSERT,UPDATE ON gab_crm_import_page_results TO gab_review_user;
+COMMIT;

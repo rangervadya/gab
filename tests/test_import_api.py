@@ -22,7 +22,7 @@ class ImportApiTests(unittest.TestCase):
         for path in ['app/schema.sql', 'app/schema_crm.sql', 'app/schema_mailings.sql', 'app/schema_notifications.sql',
                      'migrations/20261116_investor_import.sql', 'migrations/20261115_import_enrichment.sql',
                      'migrations/20261118_contacts_import_audit.sql', 'migrations/20261119_import_editor.sql',
-                     'migrations/20261119_import_editor.sql', 'migrations/20261119_import_progress.sql']:
+                     'migrations/20261119_import_editor.sql', 'migrations/20261119_import_progress.sql', 'migrations/20261119_import_page_cache.sql', 'migrations/20261119_import_page_cache.sql']:
             cls.conn.execute((root / path).read_text())
         os.environ['DATABASE_URL'] = URL
         os.environ['GAB_APP_USER'] = 'synthetic-reviewer'
@@ -84,6 +84,33 @@ class ImportApiTests(unittest.TestCase):
         self.assertEqual(confirm.status_code, 200, confirm.text)
         self.assertIsNone(self.conn.execute('SELECT investor_id FROM gab_crm_import_rows WHERE id=%s', [row_id]).fetchone()[0])
         self.assertEqual(c.get(url + '/file').content, b'%PDF-1.4\nsynthetic fixture')
+
+    def test_page_cache_survives_retry_and_fences_old_worker(self):
+        c=self.client
+        batch=c.post('/api/mailings/imports',files={'file':('cache.pdf',b'%PDF-1.4 synthetic','application/pdf')}).json()['item']['id']
+        url=f'/api/mailings/imports/{batch}'
+        token=c.post(url+'/claim').json()['item']['worker_token']
+        headers={'X-GAB-Worker-Token':token}
+        payload={'source_page':1,'request_hash':'a'*64}
+        def call(data=payload,head=headers):
+            return c.post(url+'/page-result',json=data,headers=head,auth=None)
+        self.assertEqual(c.post(url+'/page-result',json=payload,auth=None).status_code,401)
+        self.assertIsNone(call().json()['result'])
+        result={'done':True,'message':{'content':'{"records":[{"company_name":"Synthetic"}]}'}}
+        self.assertEqual(call({**payload,'result':result}).status_code,200)
+        self.assertEqual(call().json()['result'],result)
+        self.assertIsNone(call({**payload,'request_hash':'b'*64}).json()['result'])
+        self.assertEqual(call({**payload,'result':{'done':True,'message':{'content':'broken'}}}).status_code,422)
+        self.assertEqual(c.post(url+'/fail',json={'worker_token':token,'error':'Synthetic timeout page 2'}).status_code,200)
+        self.assertEqual(call().status_code,409)
+        self.assertEqual(c.post(url+'/retry').status_code,200)
+        newtoken=c.post(url+'/claim').json()['item']['worker_token']
+        self.assertNotEqual(token,newtoken)
+        self.assertEqual(call().status_code,409)
+        self.assertEqual(call(head={'X-GAB-Worker-Token':newtoken}).json()['result'],result)
+        self.assertEqual(self.conn.execute('SELECT count(*) FROM gab_crm_import_rows WHERE batch_id=%s',[batch]).fetchone()[0],0)
+        self.assertEqual(c.post(url+'/cancel').status_code,200)
+        self.assertEqual(call({**payload,'result':result},head={'X-GAB-Worker-Token':newtoken}).status_code,409)
 
     def test_manual_confirmation_is_idempotent(self):
         c = self.client

@@ -32,9 +32,9 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not APP_USER or not APP_PASSWORD:
             return JSONResponse({"detail": "GAB_APP_USER and GAB_APP_PASSWORD must be configured"}, status_code=503)
-        # Only this narrowly scoped callback accepts a batch capability token.
+        # Only these narrowly scoped callbacks accept a batch capability token.
         # The endpoint validates it against that processing batch in PostgreSQL.
-        if request.method == "POST" and re.fullmatch(r"/api/mailings/imports/[0-9]+/progress",request.url.path) and request.headers.get("x-gab-worker-token"):
+        if request.method == "POST" and re.fullmatch(r"/api/mailings/imports/[0-9]+/(?:progress|page-result)",request.url.path) and request.headers.get("x-gab-worker-token"):
             return await call_next(request)
         auth = request.headers.get("authorization", "")
         try:

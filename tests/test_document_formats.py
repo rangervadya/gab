@@ -97,13 +97,15 @@ class DocumentTests(unittest.TestCase):
         # Construct JSON with the same message.content contract as Ollama.
         import json
         response.read.return_value=json.dumps({'message':{'content':'{"records":[]}'},'done':True}).encode()
-        with patch('progress.Reporter.report') as report,patch('urllib.request.urlopen',return_value=response) as opener:
+        with patch('progress.Reporter.page_result',return_value=None) as cache,patch('progress.Reporter.report') as report,patch('urllib.request.urlopen',return_value=response) as opener:
             result=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json={
                 'batch_id':1,'worker_token':'a'*32,'source_page':1,'pages_total':2,
                 'ollama_request':{'model':'synthetic','stream':False,'messages':[]}})
             self.assertEqual(result.status_code,200,result.text)
             self.assertEqual(result.json()['message']['content'],'{"records":[]}')
             self.assertEqual(report.call_args_list[-1].args,('llm',2,1))
+            self.assertEqual(cache.call_count,2)
+            self.assertEqual(result.json()['_gab_source_page'],1)
             self.assertEqual(opener.call_args.args[0].full_url,'http://ollama_ai:11434/api/chat')
 
     def test_cancelled_document_never_reaches_ollama(self):
@@ -115,6 +117,68 @@ class DocumentTests(unittest.TestCase):
                 'ollama_request':{'model':'synthetic','stream':False,'messages':[]}})
             self.assertEqual(result.status_code,409)
             opener.assert_not_called()
+
+    def test_cached_page_skips_model_and_busy_page_does_not_queue(self):
+        from unittest.mock import patch
+        payload={'batch_id':1,'worker_token':'a'*32,'source_page':2,'pages_total':2,
+                 'ollama_request':{'model':'synthetic','stream':False,'messages':[]}}
+        cached={'message':{'content':'{"records":[]}'},'done':True}
+        with patch('progress.Reporter.report'),patch('progress.Reporter.page_result',return_value=cached),patch('urllib.request.urlopen') as opener:
+            response=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertTrue(response.json()['_gab_last_page'])
+            opener.assert_not_called()
+        # setUpClass loads app as a module without registering it in sys.modules.
+        endpoint=next(r.endpoint for r in self.client.app.routes if r.path=='/ollama/chat')
+        lock=endpoint.__globals__['OLLAMA_LOCK']
+        lock.acquire()
+        try:
+            with patch('progress.Reporter.report'),patch('urllib.request.urlopen') as opener:
+                response=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+                self.assertEqual(response.status_code,429)
+                opener.assert_not_called()
+        finally:lock.release()
+
+    def test_incomplete_json_is_not_cached_and_lock_is_released(self):
+        from unittest.mock import patch,MagicMock
+        import json
+        payload={'batch_id':1,'worker_token':'a'*32,'source_page':7,'pages_total':8,
+                 'ollama_request':{'model':'synthetic','stream':False,'messages':[]}}
+        for result in [{'message':{'content':'broken'},'done':True},
+                       {'message':{'content':'{"records":[]}'},'done':True,'done_reason':'length'}]:
+            response=MagicMock();response.__enter__.return_value=response
+            response.read.return_value=json.dumps(result).encode()
+            with patch('progress.Reporter.report'),patch('progress.Reporter.page_result',return_value=None) as cache,patch('urllib.request.urlopen',return_value=response):
+                actual=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+                self.assertEqual(actual.status_code,502,actual.text)
+                self.assertIn('7',actual.json()['detail'])
+                self.assertEqual(cache.call_count,1)
+
+    def test_retry_only_calls_model_for_missing_pages(self):
+        from unittest.mock import patch,MagicMock
+        import json
+        saved={};model_pages=[];fail=True
+        def cache(page,key,result=None):
+            if result is not None:saved[(page,key)]=result
+            return saved.get((page,key))
+        def model(req,**kwargs):
+            page=json.loads(req.data)['synthetic_page']
+            model_pages.append(page)
+            if page==7 and fail:raise TimeoutError()
+            response=MagicMock();response.__enter__.return_value=response
+            response.read.return_value=json.dumps({'done':True,'message':{'content':'{"records":[]}'}}).encode()
+            return response
+        def process(page):
+            return self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json={
+                'batch_id':1,'worker_token':'a'*32,'source_page':page,'pages_total':8,
+                'ollama_request':{'model':'synthetic','stream':False,'synthetic_page':page}})
+        with patch('progress.Reporter.report'),patch('progress.Reporter.page_result',side_effect=cache),patch('urllib.request.urlopen',side_effect=model):
+            for page in range(1,7):self.assertEqual(process(page).status_code,200)
+            self.assertEqual(process(7).status_code,502)
+            fail=False
+            for page in range(1,9):self.assertEqual(process(page).status_code,200)
+        self.assertEqual(model_pages,[1,2,3,4,5,6,7,7,8])
+        self.assertEqual(len(saved),8)
 
     @unittest.skipUnless(shutil.which('tesseract'), 'Tesseract rus+eng is required for real OCR tests')
     def test_image_and_scanned_pdf(self):

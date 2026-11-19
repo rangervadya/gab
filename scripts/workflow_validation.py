@@ -98,4 +98,9 @@ def validate_workflow(w):
             raise ValueError('Worker token is required on every ingestion/error request')
     if 'worker_token' not in by_name['Claim and normalize']['parameters'].get('jsCode', ''):
         raise ValueError('Claim token must be carried through the workflow')
+    pagination=by_name['Ollama extract investors']['parameters'].get('options',{}).get('pagination',{}).get('pagination',{})
+    if pagination.get('paginationMode')!='updateAParameterInEachRequest' or pagination.get('maxRequests')!=200 or pagination.get('limitPagesFetched') is not True:
+        raise ValueError('Sequential bounded Ollama pagination is required')
+    if pagination.get('completeExpression')!='={{ $response.body._gab_last_page === true }}':
+        raise ValueError('Ollama must stop after the last completed page')
     return w

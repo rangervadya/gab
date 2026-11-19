@@ -1,4 +1,4 @@
-> Новый индикатор требует согласованного обновления CRM, OCR 0.4.5 и GAB 02: [IMPORT_PROGRESS_RU.md](IMPORT_PROGRESS_RU.md). Для него используйте `scripts/deploy-import-progress.sh`.
+> Новый индикатор требует согласованного обновления CRM, OCR 0.4.6 и GAB 02: [IMPORT_PROGRESS_RU.md](IMPORT_PROGRESS_RU.md). Для него используйте `scripts/deploy-import-progress.sh`.
 
 > Для обновления функции массовой отправки используйте отдельный [deploy-mailings.sh](../scripts/deploy-mailings.sh): [MASS_MAILING_RU.md](MASS_MAILING_RU.md). Он не меняет workflow и не отправляет писем.
 

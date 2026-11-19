@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import hashlib
+import threading
 import json
 import io
 import zipfile
@@ -21,8 +23,11 @@ import pytesseract
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pytesseract import Output
 
+# Single uvicorn worker in Dockerfile: never queue multiple model requests.
+OLLAMA_LOCK = threading.Lock()
+
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.5"
+APP_VERSION = "0.4.6"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))
@@ -1136,13 +1141,23 @@ def tracked_ollama_chat(body: dict, x_api_key: str | None = Header(default=None,
     if len(raw)>2*1024*1024:raise HTTPException(413,'Запрос страницы слишком большой')
     reporter=Reporter(batch_id,token)
     reporter.report('llm',total,require_active=True)
-    req=urllib.request.Request('http://ollama_ai:11434/api/chat',data=raw,headers={'Content-Type':'application/json'},method='POST')
+    request_hash=hashlib.sha256(json.dumps(request_body,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    if not OLLAMA_LOCK.acquire(blocking=False):
+        raise HTTPException(429,'Ollama занята другим документом. Повторите обработку позже; сохранённые страницы останутся.')
     try:
-        with urllib.request.urlopen(req,timeout=1800) as response:
-            result=json.loads(response.read(5*1024*1024))
-    except Exception as exc:
-        raise HTTPException(502,'Ollama не завершила страницу: '+type(exc).__name__) from None
-    if not isinstance(result,dict) or not isinstance(result.get('message',{}).get('content'),str):
-        raise HTTPException(502,'Ollama не вернула структурированный ответ')
-    reporter.report('llm',total,page)
-    return result
+        result=reporter.page_result(page,request_hash)
+        if result is None:
+            req=urllib.request.Request('http://ollama_ai:11434/api/chat',data=raw,headers={'Content-Type':'application/json'},method='POST')
+            try:
+                with urllib.request.urlopen(req,timeout=1800) as response:
+                    result=json.loads(response.read(5*1024*1024))
+                parsed=json.loads(result['message']['content'])
+                if result.get('done') is not True or result.get('done_reason')=='length' or not isinstance(parsed.get('records'),list):
+                    raise ValueError('incomplete records')
+            except Exception as exc:
+                raise HTTPException(502,f'Страница {page}: Ollama не завершила корректный JSON ({type(exc).__name__}). Успешные страницы сохранены.') from None
+            reporter.page_result(page,request_hash,result)
+        reporter.report('llm',total,page,require_active=True)
+        return {**result,'_gab_source_page':page,'_gab_last_page':page==total}
+    finally:
+        OLLAMA_LOCK.release()

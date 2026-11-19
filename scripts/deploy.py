@@ -421,7 +421,7 @@ class Deployment:
 
     def migrate(self):
         log('Applying idempotent import-editor migration…')
-        for migration in ('20261119_import_editor.sql','20261119_bulk_mailing.sql','20261119_import_progress.sql'):
+        for migration in ('20261119_import_editor.sql','20261119_bulk_mailing.sql','20261119_import_progress.sql','20261119_import_page_cache.sql'):
             self.sql(None,data=(ROOT/'migrations'/migration).read_bytes())
         found=self.sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='gab_crm_import_rows' AND column_name IN ('manual_overrides','edit_version')")
         if found!='2':raise DeployError('Editor migration postcondition failed')
