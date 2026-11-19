@@ -3,15 +3,18 @@
 
   const $ = id => document.getElementById(id);
   const MAX_SIZE = 20 * 1024 * 1024;
-  const ALLOWED = ["pdf", "xls", "xlsx", "doc", "docx"];
+  const ALLOWED = ["pdf", "xls", "xlsx", "doc", "docx", "jpg", "jpeg", "png", "tif", "tiff", "csv", "pptx"];
 
   const state = {
     batches: [],
+    rows: [],
     selectedBatchId: null,
     selectedFiles: [],
     uploading: false,
     initialized: false,
     query: "",
+    offset: 0,
+    total: 0,
     segment: "all"
   };
 
@@ -208,9 +211,9 @@
   function renderEmptyRows(batch) {
     let message = "В этом пакете пока нет распознанных строк.";
     if (batch.status === "uploaded") {
-      message = "Документ загружен и ожидает обработки. GAB 02 сейчас выключен, поэтому автоматическая обработка ещё не запускалась.";
+      message = "Документ загружен и ожидает обработки. Обновите список для проверки результата.";
     } else if (batch.status === "failed") {
-      message = "Обработка пакета завершилась ошибкой. Проверьте состояние workflow и журнал n8n.";
+      message = "Ошибка обработки: " + (batch.error_message || "Проверьте журнал n8n");
     } else if (batch.status === "processing") {
       message = "Документ сейчас обрабатывается.";
     }
@@ -222,7 +225,7 @@
   function renderRows(rows, batch) {
     const area = $("importRowsArea");
 
-    if (!rows.length) {
+    if (!rows.length && !state.query && state.segment === "all" && state.offset === 0) {
       renderEmptyRows(batch);
       return;
     }
@@ -266,7 +269,7 @@
             <div class="import-muted">${esc(row.revenue_year || "")}</div></td>
           <td><span class="import-status">${esc(rowStatus(row.import_status))}</span>
             ${hasWarnings ? '<div class="import-warning">Есть предупреждения</div>' : ""}</td>
-          <td><button class="button secondary import-preview-button"
+          <td><button class="button secondary" type="button" data-edit-import="${Number(row.id)}">Изменить</button><button class="button secondary import-preview-button"
             type="button" data-preview-row="${Number(row.id)}">Совпадения</button></td>
         </tr>`;
     }).join("");
@@ -280,10 +283,14 @@
             <th>Email</th><th>Телефон</th><th>Выручка</th>
             <th>Статус</th><th>Проверка</th>
           </tr></thead>
-          <tbody>${tableRows}</tbody>
+          <tbody>${tableRows || '<tr><td colspan="8">Нет строк по выбранному фильтру</td></tr>'}</tbody>
         </table>
       </div>
-      <p class="import-muted">Показано строк: ${rows.length}. Для проверки совпадений нажмите соответствующую кнопку.</p>`;
+      <p class="import-muted">Показано строк: ${rows.length} из ${state.total}.</p>
+      <div class="import-actions">
+        <button class="button secondary" type="button" data-import-page="prev" ${state.offset === 0 ? "disabled" : ""}>Назад</button>
+        <button class="button secondary" type="button" data-import-page="next" ${state.offset + rows.length >= state.total ? "disabled" : ""}>Далее</button>
+      </div>`;
 
     $("importRowSegment").value = state.segment;
   }
@@ -299,7 +306,7 @@
 
     const params = new URLSearchParams({
       limit: "200",
-      offset: "0",
+      offset: String(state.offset),
       segment: state.segment,
       q: state.query
     });
@@ -309,11 +316,14 @@
     );
 
     const rows = Array.isArray(result.items) ? result.items : [];
+    state.rows = rows;
+    state.total = Number(result.total || 0);
     renderRows(rows, batch);
   }
 
   async function selectBatch(batchId) {
     state.selectedBatchId = Number(batchId);
+    state.offset = 0;
     renderBatches();
 
     const batch = state.batches.find(
@@ -330,10 +340,19 @@
             ${esc(batchStatus(batch.status))} · ${dateText(batch.created_at)}
           </p>
         </div>
+        ${batch.status === "failed" ? `<button type="button" class="button secondary" id="importRetryBtn">Повторить обработку</button>` : ""}
         <a class="button secondary" target="_blank" rel="noopener"
           href="/api/mailings/imports/${Number(batch.id)}/file">Скачать оригинал</a>
       </div>`;
 
+    const retry = $("importRetryBtn");
+    if (retry) retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      try {
+        await request(`/api/mailings/imports/${Number(batch.id)}/retry`, {method: "POST"});
+        await loadBatches(batch.id);
+      } catch (error) { notifyImport(error.message, true); retry.disabled = false; }
+    });
     await loadRows();
   }
 
@@ -370,7 +389,34 @@
     return JSON.stringify(value, null, 2);
   }
 
-  async function showPreview(rowId) {
+  const reasonLabels = {
+  "identity_missing": "Не указаны компания и ФИО",
+  "no_contact_details_requires_review": "Нет контактных данных",
+  "reserved_test_email_domain_requires_review": "Email относится к тестовому домену",
+  "revenue_status_not_eligible": "Финансовая проверка не пройдена",
+  "revenue_amount_missing_or_invalid": "Выручка не указана или некорректна",
+  "revenue_below_100m": "Выручка ниже обязательного порога 100 млн ₽",
+  "revenue_year_missing_or_invalid": "Не указан корректный год выручки",
+  "revenue_source_missing": "Не указан источник выручки",
+  "extraction_warnings_require_manual_review": "Проверьте предупреждения извлечения в исходных данных",
+  "invalid_inn_requires_review": "Неверная контрольная сумма ИНН",
+  "inn_missing_requires_review": "Не указан ИНН",
+  "inn_and_company_name_point_to_different_companies": "ИНН и название указывают на разные компании",
+  "multiple_companies_with_same_inn": "Найдены несколько компаний с одинаковым ИНН",
+  "multiple_companies_with_same_name": "Найдены несколько компаний с одинаковым названием",
+  "company_name_match_has_different_inn": "У компании с таким названием другой ИНН",
+  "company_name_match_requires_confirmation": "Совпадение по названию требует выбора компании",
+  "multiple_contacts_match_email_or_phone": "Email или телефон совпадает у нескольких контактов",
+  "contact_company_not_matched_to_import_company": "Компания найденного контакта не сопоставлена",
+  "contact_belongs_to_different_company": "Контакт принадлежит другой компании",
+  "contact_name_conflicts_with_matched_email_or_phone": "У найденного по email или телефону контакта другое ФИО",
+  "contact_name_match_requires_confirmation": "Совпадение по ФИО требует выбора контакта",
+  "multiple_investors_match": "Найдены несколько инвесторов, выберите карточку",
+  "investor_has_another_primary_contact": "У инвестора другой основной контакт"
+};
+  const reasonText = reason => reasonLabels[reason] || String(reason);
+
+  async function showPreview(rowId, decisions = {}) {
     const batchId = Number(state.selectedBatchId);
     $("importPreviewPanel").hidden = false;
     $("importPreviewContent").innerHTML =
@@ -378,7 +424,8 @@
 
     try {
       const data = await request(
-        `/api/mailings/imports/${batchId}/rows/${Number(rowId)}/match-preview`
+        `/api/mailings/imports/${batchId}/rows/${Number(rowId)}/match-preview`,
+        {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({decisions})}
       );
 
       const reasons = Array.isArray(data.reasons) ? data.reasons : [];
@@ -395,7 +442,7 @@
         </div>
         <h3>Причины проверки</h3>
         ${reasons.length
-          ? `<ul>${reasons.map(reason => `<li>${esc(typeof reason === "string" ? reason : JSON.stringify(reason))}</li>`).join("")}</ul>`
+          ? `<ul>${reasons.map(reason => `<li>${esc(typeof reason === "string" ? reasonText(reason) : JSON.stringify(reason))}</li>`).join("")}</ul>`
           : "<p class='import-muted'>Автоматические проверки не обнаружили блокирующих причин.</p>"}
         <details class="import-candidates">
           <summary>Кандидаты компаний</summary>
@@ -409,14 +456,128 @@
           <summary>Кандидаты инвесторов</summary>
           <pre>${esc(prettyList(data.investor_candidates))}</pre>
         </details>
-        <p class="import-safety-note">
-          Это только предпросмотр. Карточки CRM не создаются и не изменяются.
-        </p>`;
+        <h3>План переноса</h3>
+        <p>${esc(data.plan.merge)}</p>
+        <p>Компания: ${esc({create:"создать",match:"сопоставить",none:"не создаётся"}[data.plan.company])} · контакт: ${esc({create:"создать",match:"сопоставить",none:"не создаётся"}[data.plan.contact])} · инвестор: ${esc({create:"создать",match:"сопоставить"}[data.plan.investor])}</p>
+        <p>Финансовая проверка: ${esc(data.row.revenue_status)} · ${moneyText(data.row.revenue_rub)} · ${esc(data.row.revenue_year || "—")} · ${esc(data.row.revenue_source || "—")}</p>
+        <details><summary>Данные и ручные исправления</summary><pre class="import-raw">${esc(prettyList(data.row))}</pre></details>
+        <form id="importConfirmForm">
+          ${["company", "contact", "investor"].map(kind => `
+            <label>${esc({company: "Компания", contact: "Контакт", investor: "Инвестор"}[kind])}
+              <select class="import-text-input" name="${kind}_id">
+                <option value="auto">Предложение системы: ${esc(data["suggested_" + kind + "_id"] || "новая карточка")}</option>
+                <option value="new">Создать новую карточку</option>
+                ${(data[kind + "_candidates"] || []).map(item => `<option value="${Number(item.id)}">№${Number(item.id)} ${esc(item.company_name || item.full_name || item.name)}</option>`).join("")}
+              </select>
+            </label>`).join("")}
+          <button type="button" class="button secondary" id="importRecheckPlan">Обновить план с выбранными карточками</button>
+          ${reasons.map((reason, i) => (data.acknowledgeable_reasons || []).includes(reason)
+            ? `<label class="import-ack"><input type="checkbox" name="warning_${i}">Разрешаю продолжить с предупреждением: ${esc(reasonText(reason))}</label>`
+            : `<p class="import-warning">Блокирует перенос: ${esc(reasonText(reason))}</p>`).join("")}
+          <p class="import-muted">Финансовые ограничения и противоречивые связи остаются блокирующими.</p>
+          <label class="import-ack"><input type="checkbox" name="reviewed" required>Проверил данные и план. Подтверждаю перенос в CRM.</label>
+          <button class="button" type="submit">Подтвердить перенос</button>
+          <p id="importConfirmStatus" role="status"></p>
+        </form>`;
+      const form = $("importConfirmForm");
+      for (const [key, value] of Object.entries(decisions)) form.elements[key].value = value === null ? "new" : String(value);
+      const getDecisions = () => Object.fromEntries(["company_id", "contact_id", "investor_id"]
+        .filter(key => form.elements[key].value !== "auto")
+        .map(key => [key, form.elements[key].value === "new" ? null : Number(form.elements[key].value)]));
+      $("importRecheckPlan").addEventListener("click", () => showPreview(rowId, getDecisions()));
+      form.addEventListener("change", event => {
+        if (["company_id", "contact_id", "investor_id"].includes(event.target.name)) {
+          form.querySelector('[type="submit"]').disabled = true;
+          $("importConfirmStatus").textContent = "Обновите план после выбора карточек";
+        }
+      });
+      form.addEventListener("submit", async event => {
+        event.preventDefault();
+        const button = form.querySelector('[type="submit"]');
+        button.disabled = true;
+        try {
+          const result = await request(`/api/mailings/imports/${batchId}/rows/${Number(rowId)}/confirm`, {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({version: data.version, decisions: getDecisions(),
+              expected_plan: Object.fromEntries(["company_id", "contact_id", "investor_id"].map(key => [key, data["suggested_" + key]])),
+              acknowledged_warnings: reasons.filter((_, i) => form.elements["warning_" + i]?.checked)})
+          });
+          $("importConfirmStatus").textContent = result.status === "needs_review"
+            ? "Перенос заблокирован: " + (result.reasons || []).map(reasonText).join("; ")
+            : `Перенос выполнен. Компания №${result.company_id || "—"}, контакт №${result.contact_id || "—"}, инвестор №${result.investor_id}.`;
+          await loadRows();
+        } catch (error) { $("importConfirmStatus").textContent = error.message; }
+      });
       $("importPreviewPanel").scrollIntoView({behavior: "smooth", block: "nearest"});
     } catch (error) {
       $("importPreviewContent").innerHTML =
         `<div class="import-error">${esc(error.message)}</div>`;
     }
+  }
+
+  const editFields = {
+    company_name: "Компания", inn: "ИНН", city: "Город", full_name: "ФИО",
+    position: "Должность", phone: "Телефон", email: "Email", revenue_rub: "Выручка, ₽",
+    revenue_year: "Год выручки", revenue_source: "Источник выручки", notes: "Комментарий"
+  };
+
+  async function showEditor(rowId) {
+    const row = state.rows.find(item => Number(item.id) === rowId);
+    if (!row) return;
+    const panel = $("importPreviewPanel");
+    panel.hidden = false;
+    const readonly = !["pending", "needs_review"].includes(row.import_status);
+    $("importPreviewContent").innerHTML = `
+      <h3>Редактирование строки №${rowId}</h3>
+      <form id="importEditForm">
+        <div class="import-preview-grid">${Object.entries(editFields).map(([key, label]) => `
+          <label>${esc(label)}<input class="import-text-input" name="${key}"
+            type="${key === "email" ? "email" : "text"}" value="${esc(row[key] ?? "")}"
+            ${readonly ? "disabled" : ""}></label>`).join("")}</div>
+        <p id="importSaveStatus" role="status">${readonly ? "Строка закрыта для изменений" : "Изменения ещё не сохранены"}</p>
+        <button class="button" type="submit" ${readonly ? "disabled" : ""}>Сохранить</button>
+        <button class="button secondary" type="reset">Отменить изменения</button>
+      </form>
+      <details><summary>Исходные данные OCR</summary><pre class="import-raw">${esc(prettyList(row.raw_data))}</pre></details>
+      <div id="importEditHistory">Загрузка истории…</div>`;
+    const form = $("importEditForm");
+    form.addEventListener("reset", () => { $("importSaveStatus").textContent = "Изменения отменены"; });
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = true;
+      const changes = Object.fromEntries(Object.keys(editFields)
+        .filter(key => form.elements[key].value !== String(row[key] ?? ""))
+        .map(key => [key, form.elements[key].value]));
+      if (!Object.keys(changes).length) {
+        $("importSaveStatus").textContent = "Нет изменений";
+        button.disabled = false;
+        return;
+      }
+      $("importSaveStatus").textContent = "Сохраняем…";
+      try {
+        const result = await request(`/api/mailings/imports/${state.selectedBatchId}/rows/${rowId}`, {
+          method: "PATCH", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({version: row.edit_version, changes})
+        });
+        Object.assign(row, result.item);
+        await loadRows();
+        await showEditor(rowId);
+        $("importSaveStatus").textContent = "Сохранено";
+      } catch (error) {
+        $("importSaveStatus").textContent = error.message;
+        button.disabled = false;
+      }
+    });
+    try {
+      const history = await request(`/api/mailings/imports/${state.selectedBatchId}/rows/${rowId}/edits`);
+      if ($("importEditForm") === form) $("importEditHistory").innerHTML = `<h4>История исправлений</h4>${history.items.map(item =>
+        `<details><summary>${dateText(item.created_at)} · ${esc(item.actor)}</summary><pre class="import-raw">${esc(prettyList(item.changes))}</pre></details>`
+      ).join("") || "Исправлений пока нет"}`;
+    } catch (error) {
+      if ($("importEditForm") === form) $("importEditHistory").textContent = error.message;
+    }
+    panel.scrollIntoView({behavior: "smooth", block: "nearest"});
   }
 
   async function uploadFiles() {
@@ -456,6 +617,7 @@
         failed = true;
         results.push(`<div class="import-error">✕ ${esc(file.name)} — ${esc(error.message)}</div>`);
       }
+      $("importUploadResults").innerHTML = results.join("");
     }
 
     $("importUploadResults").innerHTML = results.join("");
@@ -508,7 +670,14 @@
     });
 
     $("importRowsArea").addEventListener("click", async event => {
+      const pageButton = event.target.closest("[data-import-page]");
+      if (pageButton) {
+        state.offset = Math.max(0, state.offset + (pageButton.dataset.importPage === "next" ? 200 : -200));
+        try { await loadRows(); } catch (error) { notifyImport(error.message, true); }
+        return;
+      }
       if (event.target.closest("#importRowFilterBtn")) {
+        state.offset = 0;
         state.query = $("importRowSearch").value.trim();
         state.segment = $("importRowSegment").value;
         try { await loadRows(); }
@@ -516,12 +685,15 @@
         return;
       }
 
+      const editButton = event.target.closest("[data-edit-import]");
+      if (editButton) { await showEditor(Number(editButton.dataset.editImport)); return; }
       const previewButton = event.target.closest("[data-preview-row]");
       if (previewButton) await showPreview(previewButton.dataset.previewRow);
     });
 
     $("importRowsArea").addEventListener("keydown", async event => {
       if (event.key === "Enter" && event.target.id === "importRowSearch") {
+        state.offset = 0;
         state.query = event.target.value.trim();
         try { await loadRows(); }
         catch (error) { notifyImport(error.message, true); }

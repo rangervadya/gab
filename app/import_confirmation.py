@@ -1,4 +1,5 @@
 import re
+import os
 from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, HTTPException
 from psycopg.types.json import Jsonb
@@ -191,7 +192,8 @@ def _load_row(conn, batch_id, row_id, lock=False):
     return dict(row)
 
 
-def _analyze(conn, row):
+def _analyze(conn, row, decisions=None):
+    decisions = decisions or {}
     company_name = _text(row.get("company_name"))
     inn = _text(row.get("inn"))
     full_name = _text(row.get("full_name"))
@@ -302,6 +304,20 @@ def _analyze(conn, row):
         else:
             reasons.append("company_name_match_requires_confirmation")
 
+    if 'company_id' in decisions:
+        selected = decisions['company_id']
+        if selected is None:
+            if by_inn:
+                raise HTTPException(409, 'Компания с этим ИНН уже существует')
+            company_id = None
+        elif type(selected) is not int or selected not in company_map:
+            raise HTTPException(422, 'Выберите компанию из найденных кандидатов')
+        else:
+            candidate = company_map[selected]
+            if inn and candidate.get('inn') and _digits(candidate['inn']) != _digits(inn):
+                raise HTTPException(409, 'ИНН выбранной компании отличается')
+            company_id = selected
+
     # Match contacts by exact email or normalized phone, across CRM.
     contact_candidates = []
 
@@ -399,6 +415,18 @@ def _analyze(conn, row):
             contact_candidates = [dict(x) for x in named]
             reasons.append("contact_name_match_requires_confirmation")
 
+    if 'contact_id' in decisions:
+        selected = decisions['contact_id']
+        candidates = {c['id']: c for c in contact_candidates}
+        if selected is None:
+            contact_id = None
+        elif type(selected) is not int or selected not in candidates:
+            raise HTTPException(422, 'Выберите контакт из найденных кандидатов')
+        elif candidates[selected]['company_id'] not in (None, company_id):
+            raise HTTPException(409, 'Контакт принадлежит другой компании')
+        else:
+            contact_id = selected
+
     # Find investor candidates by company/name or matched primary contact.
     target_name = full_name or company_name
     investor_candidates = []
@@ -443,6 +471,18 @@ def _analyze(conn, row):
             reasons.append("investor_has_another_primary_contact")
         else:
             investor_id = candidate["id"]
+
+    if 'investor_id' in decisions:
+        selected = decisions['investor_id']
+        candidates = {c['id']: c for c in investor_candidates}
+        if selected is None:
+            investor_id = None
+        elif type(selected) is not int or selected not in candidates:
+            raise HTTPException(422, 'Выберите инвестора из найденных кандидатов')
+        elif candidates[selected]['company_id'] not in (None, company_id) or candidates[selected]['primary_contact_id'] not in (None, contact_id):
+            raise HTTPException(409, 'Связи выбранного инвестора отличаются')
+        else:
+            investor_id = selected
 
     return {
         "emails_found": len(emails),
@@ -527,15 +567,44 @@ def _mark_review(conn, row, analysis):
     }
 
 
+def _acknowledgeable(decisions):
+    resolvable = {'extraction_warnings_require_manual_review'}
+    if 'company_id' in decisions:
+        resolvable |= {'company_name_match_requires_confirmation', 'multiple_companies_with_same_name',
+                       'inn_and_company_name_point_to_different_companies'}
+    if 'contact_id' in decisions:
+        resolvable |= {'contact_name_match_requires_confirmation', 'multiple_contacts_match_email_or_phone',
+                       'contact_name_conflicts_with_matched_email_or_phone', 'contact_company_not_matched_to_import_company'}
+    if 'investor_id' in decisions:
+        resolvable |= {'multiple_investors_match', 'investor_has_another_primary_contact'}
+    return resolvable
+
+
 @router.get("/{batch_id}/rows/{row_id}/match-preview")
 def import_match_preview(batch_id: int, row_id: int):
+    return preview_import_decisions(batch_id, row_id, {})
+
+
+@router.post("/{batch_id}/rows/{row_id}/match-preview")
+def preview_import_decisions(batch_id: int, row_id: int, body: dict):
     with get_conn() as conn:
         row = _load_row(conn, batch_id, row_id)
-        analysis = _analyze(conn, row)
+        decisions = body.get("decisions", {})
+        if not isinstance(decisions, dict) or set(decisions) - {"company_id", "contact_id", "investor_id"}:
+            raise HTTPException(422, "Некорректные решения")
+        analysis = _analyze(conn, row, decisions)
 
     return {
         "batch_id": batch_id,
         "row_id": row_id,
+        "version": row.get("edit_version", 0),
+        "row": row,
+        "plan": {
+            "company": "match" if analysis["suggested_company_id"] else "create" if row.get("company_name") else "none",
+            "contact": "match" if analysis["suggested_contact_id"] else "create" if row.get("full_name") else "none",
+            "investor": "match" if analysis["suggested_investor_id"] else "create",
+            "merge": "Дополняются пустые поля и списки email/телефонов. Заполненные основные поля сохраняются.",
+        },
         "import_status": row["import_status"],
         "company_name": row["company_name"],
         "inn": row["inn"],
@@ -551,12 +620,14 @@ def import_match_preview(batch_id: int, row_id: int):
         "suggested_contact_id": analysis["suggested_contact_id"],
         "suggested_investor_id": analysis["suggested_investor_id"],
         "reasons": analysis["reasons"],
+        "acknowledgeable_reasons": [r for r in analysis["reasons"] if r in _acknowledgeable(decisions)],
         "can_auto_confirm": not analysis["reasons"],
     }
 
 
 @router.post("/{batch_id}/rows/{row_id}/confirm")
-def confirm_import_row(batch_id: int, row_id: int):
+def confirm_import_row(batch_id: int, row_id: int, body: dict | None = None):
+    body = body or {}
     with get_conn() as conn:
         row = _load_row(conn, batch_id, row_id, lock=True)
 
@@ -608,7 +679,25 @@ def confirm_import_row(batch_id: int, row_id: int):
                 [key]
             )
 
-        analysis = _analyze(conn, row)
+        if body and body.get('version') != row.get('edit_version'):
+            raise HTTPException(409, 'Данные изменились. Повторите предпросмотр')
+        decisions = body.get('decisions', {})
+        if not isinstance(decisions, dict) or set(decisions) - {'company_id', 'contact_id', 'investor_id'}:
+            raise HTTPException(422, 'Некорректные решения о совпадениях')
+        analysis = _analyze(conn, row, decisions)
+        expected_plan = body.get('expected_plan')
+        if expected_plan is not None:
+            actual_plan = {key: analysis['suggested_' + key] for key in ('company_id', 'contact_id', 'investor_id')}
+            if expected_plan != actual_plan:
+                raise HTTPException(409, 'Совпадения изменились. Повторите предпросмотр')
+        original_reasons = list(analysis['reasons'])
+        acknowledged = body.get('acknowledged_warnings', [])
+        if not isinstance(acknowledged, list) or any(not isinstance(x, str) for x in acknowledged):
+            raise HTTPException(422, 'Некорректный список предупреждений')
+        # Only these nonfinancial warnings can be explicitly accepted. Financial
+        # requirements, invalid identifiers and contradictory links stay blocking.
+        resolvable = _acknowledgeable(decisions)
+        analysis['reasons'] = [r for r in original_reasons if not (r in resolvable and r in acknowledged)]
 
         if analysis["reasons"]:
             return _mark_review(conn, row, analysis)
@@ -851,6 +940,10 @@ def confirm_import_row(batch_id: int, row_id: int):
                     "company_id": company_id,
                     "contact_id": contact_id,
                     "investor_id": investor_id,
+                    "actor": os.environ.get("GAB_APP_USER", "unknown"),
+                    "decisions": decisions,
+                    "acknowledged_warnings": [r for r in original_reasons if r in acknowledged],
+                    "manual_overrides": row.get("manual_overrides", {}),
                     "email_count": len(emails),
                     "phone_count": len(phones),
                 })

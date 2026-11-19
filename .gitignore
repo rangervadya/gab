@@ -228,3 +228,18 @@ __marimo__/
 *.before
 *.before-*
 *.before_*
+
+# Production secrets, backups and personal investor documents
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.dump
+*.sql.gz
+backups/
+uploads/
+investor-imports/
+credentials*.json
+n8n-credentials*.json
+.DS_Store

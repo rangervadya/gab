@@ -22,7 +22,9 @@ STORAGE_DIR = Path(
     )
 )
 
-ALLOWED_EXTENSIONS = {"pdf", "xls", "xlsx", "doc", "docx"}
+from app.import_files import MIME_TYPES, validate_file
+
+ALLOWED_EXTENSIONS = set(MIME_TYPES)
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
 
@@ -49,7 +51,7 @@ def get_batch(batch_id):
     if not row:
         raise HTTPException(status_code=404, detail="Папка импорта не найдена")
 
-    return row
+    return {k: v for k, v in row.items() if k != "worker_token"}
 
 
 @router.post("")
@@ -68,7 +70,7 @@ async def upload_import_file(
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=415,
-            detail="Разрешены PDF, XLS, XLSX, DOC и DOCX",
+            detail="Неподдерживаемый формат документа",
         )
 
     content = await file.read(MAX_FILE_SIZE + 1)
@@ -91,6 +93,11 @@ async def upload_import_file(
         or mimetypes.guess_type(original)[0]
         or "application/octet-stream"
     )
+
+    try:
+        validate_file(extension, content, mime_type)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
     target = None
 
@@ -160,7 +167,7 @@ def list_import_batches(limit: int = 100, status: str = ""):
             [status, status, limit],
         ).fetchall()
 
-    return {"items": rows, "total": len(rows)}
+    return {"items": [{k: v for k, v in row.items() if k != "worker_token"} for row in rows], "total": len(rows)}
 
 
 @router.get("/{batch_id}")
@@ -171,16 +178,21 @@ def get_import_batch(batch_id: int):
 @router.post("/{batch_id}/claim")
 def claim_import_batch(batch_id: int):
     with get_conn() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('gab-import-capacity', 0))")
+        busy = conn.execute("SELECT COUNT(*) AS count FROM gab_crm_import_batches WHERE status='processing'").fetchone()['count']
+        if busy >= max(1, int(os.environ.get('GAB_IMPORT_CONCURRENCY', '1'))):
+            return {'claimed': False, 'batch_id': batch_id, 'reason': 'capacity_limit'}
         row = conn.execute(
             """
             UPDATE gab_crm_import_batches
             SET status = 'processing',
+                worker_token = %s,
                 error_message = NULL,
                 updated_at = now()
             WHERE id = %s AND status = 'uploaded'
             RETURNING *
             """,
-            [batch_id],
+            [uuid.uuid4().hex, batch_id],
         ).fetchone()
 
         if row:
@@ -214,10 +226,10 @@ def fail_import_batch(batch_id: int, body: dict):
             SET status = 'failed',
                 error_message = %s,
                 updated_at = now()
-            WHERE id = %s AND status IN ('uploaded', 'processing')
+            WHERE id = %s AND status = 'processing' AND worker_token = %s
             RETURNING id, status, error_message
             """,
-            [message, batch_id],
+            [message, batch_id, body.get("worker_token")],
         ).fetchone()
 
         if not row:
@@ -614,6 +626,9 @@ def ingest_import_rows(batch_id: int, body: dict):
     saved_ids = []
 
     with get_conn() as conn:
+        batch = conn.execute('SELECT * FROM gab_crm_import_batches WHERE id=%s FOR UPDATE', [batch_id]).fetchone()
+        if not batch or batch['status'] not in ('processing', 'review') or not body.get('worker_token') or body['worker_token'] != batch.get('worker_token'):
+            raise HTTPException(409, 'Пакет не захвачен этим обработчиком')
         for index, original in enumerate(records, start=1):
             if not isinstance(original, dict):
                 continue
@@ -690,6 +705,10 @@ def ingest_import_rows(batch_id: int, body: dict):
             except (TypeError, ValueError):
                 revenue_year = None
 
+            currency = import_clean(record.get('revenue_currency'), 20)
+            if currency and currency.upper() not in {'RUB', 'RUR', 'РУБ', 'РУБ.', '₽'}:
+                warnings.append('foreign_currency_requires_financial_review')
+                revenue = None
             if revenue is None:
                 revenue_status = "unknown"
             elif revenue >= Decimal("100000000"):
@@ -886,3 +905,71 @@ def ingest_import_rows(batch_id: int, body: dict):
         "stats": stats,
         "status": "review",
     }
+
+
+@router.patch('/{batch_id}/rows/{row_id}')
+def edit_import_row(batch_id: int, row_id: int, body: dict):
+    from app.import_editing import validate_changes
+    try:
+        changes = validate_changes(body.get('changes'))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    version = body.get('version')
+    if type(version) is not int or version < 0:
+        raise HTTPException(422, 'Необходима версия строки')
+    with get_conn() as conn:
+        row = conn.execute(
+            'SELECT * FROM gab_crm_import_rows WHERE batch_id = %s AND id = %s FOR UPDATE',
+            [batch_id, row_id],
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, 'Строка не найдена')
+        if row['import_status'] not in ('pending', 'needs_review'):
+            raise HTTPException(409, 'Можно редактировать только неподтверждённую строку')
+        if row['edit_version'] != version:
+            raise HTTPException(409, 'Строка изменилась. Обновите данные перед сохранением')
+        changes = {key: value for key, value in changes.items() if row.get(key) != value}
+        if not changes:
+            return {'item': row}
+        # The actor is the configured Basic Auth identity, never client input.
+        actor = os.environ.get('GAB_APP_USER')
+        if not actor:
+            raise HTTPException(503, 'Пользователь аудита не настроен')
+        audit = {key: {'before': row.get(key), 'after': value} for key, value in changes.items()}
+        updated = conn.execute(
+            '''UPDATE gab_crm_import_rows
+               SET manual_overrides = manual_overrides || %s::jsonb, updated_at = now()
+               WHERE id = %s RETURNING *''',
+            [json.dumps(changes, ensure_ascii=False, default=str), row_id],
+        ).fetchone()
+        conn.execute(
+            '''INSERT INTO gab_crm_import_edits(import_row_id, actor, changes)
+               VALUES (%s, %s, %s::jsonb)''',
+            [row_id, actor, json.dumps(audit, ensure_ascii=False, default=str)],
+        )
+    return {'item': updated}
+
+
+@router.get('/{batch_id}/rows/{row_id}/edits')
+def import_edit_history(batch_id: int, row_id: int):
+    with get_conn() as conn:
+        row = conn.execute('SELECT id FROM gab_crm_import_rows WHERE batch_id=%s AND id=%s', [batch_id, row_id]).fetchone()
+        if not row:
+            raise HTTPException(404, 'Строка не найдена')
+        items = conn.execute(
+            'SELECT actor, changes, created_at FROM gab_crm_import_edits WHERE import_row_id=%s ORDER BY id DESC LIMIT 100',
+            [row_id],
+        ).fetchall()
+    return {'items': items}
+
+
+@router.post('/{batch_id}/retry')
+def retry_import_batch(batch_id: int):
+    with get_conn() as conn:
+        row = conn.execute(
+            """UPDATE gab_crm_import_batches SET status='uploaded', worker_token=NULL, error_message=NULL, updated_at=now()
+               WHERE id=%s AND status='failed' RETURNING *""", [batch_id],
+        ).fetchone()
+        if not row:
+            raise HTTPException(409, 'Повторить можно только пакет с ошибкой')
+    return {'item': row}

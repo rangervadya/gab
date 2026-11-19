@@ -709,6 +709,8 @@ def extract_pdf_text(
         total_characters = 0
 
         with fitz.open(temp_path) as document:
+            if document.page_count > 200 or document.is_encrypted:
+                raise HTTPException(422, "PDF превышает лимит 200 страниц или зашифрован")
             for index, page in enumerate(document):
                 embedded_text = (page.get_text("text") or "").strip()
                 has_images = bool(page.get_images(full=True))
@@ -719,6 +721,8 @@ def extract_pdf_text(
 
                 # Scans and image-containing pages need a full-page OCR pass.
                 if len(re.sub(r"\s+", "", embedded_text)) < 40 or has_images:
+                    if page.rect.width * page.rect.height * OCR_SCALE ** 2 > 40_000_000:
+                        raise HTTPException(413, "Слишком большая страница PDF")
                     pix = page.get_pixmap(
                         matrix=fitz.Matrix(OCR_SCALE, OCR_SCALE),
                         alpha=False,
@@ -1071,3 +1075,30 @@ def extract_pdf(file: UploadFile = File(...),
             except FileNotFoundError:
                 pass
         file.file.close()
+
+
+@app.post('/extract/document-text')
+def extract_universal_text(file: UploadFile = File(...),
+        x_api_key: str | None = Header(default=None, alias='X-API-Key')) -> dict[str, Any]:
+    require_token(x_api_key)
+    extension = Path(file.filename or '').suffix.lower()
+    if extension in {'.doc', '.docx'}:
+        return extract_word_text(file, x_api_key)
+    if extension == '.pdf':
+        return extract_pdf_text(file, x_api_key)
+    from document_text import extract_document
+    content = file.file.read(MAX_FILE_MB * 1024 * 1024 + 1)
+    file.file.close()
+    if not content:
+        raise HTTPException(400, 'Пустой документ')
+    if len(content) > MAX_FILE_MB * 1024 * 1024:
+        raise HTTPException(413, 'Документ превышает лимит размера')
+    try:
+        # OOXML limits also apply when clients call OCR directly.
+        if extension in {'.xlsx', '.pptx'}:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                if len(archive.infolist()) > 10000 or sum(i.file_size for i in archive.infolist()) > 100 * 1024 * 1024:
+                    raise ValueError('Распакованный документ слишком большой')
+        return extract_document(content, Path(file.filename).name)
+    except Exception as exc:
+        raise HTTPException(422, f'Документ не обработан: {type(exc).__name__}') from exc

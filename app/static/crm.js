@@ -485,6 +485,7 @@ function formatDateValue(value) {
 
 async function renderForm(record = null) {
   const config = forms[state.entity];
+  if (!config || state.view !== state.entity) return;
   state.editingId = record?.id ?? null;
 
   $("formTitle").textContent = record
