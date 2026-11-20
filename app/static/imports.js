@@ -239,8 +239,11 @@
           value="${esc(state.query)}" placeholder="Поиск по компании, ИНН, контакту">
         <select id="importRowSegment" class="import-text-input">
           <option value="all">Все строки</option>
-          <option value="eligible_email">Есть email</option>
-          <option value="eligible_phone">Есть телефон</option>
+          <option value="without_email">Без email — все</option>
+          <option value="without_email_phone">Без email — есть телефон</option>
+          <option value="without_email_no_phone">Без email — нет телефона</option>
+          <option value="eligible_email">Выручка от порога — есть email</option>
+          <option value="eligible_phone">Выручка от порога — есть телефон</option>
           <option value="below_threshold">Ниже порога</option>
           <option value="unknown">Не определено</option>
         </select>
@@ -252,8 +255,9 @@
     const tableRows = rows.map(row => {
       const email = row.effective_email || row.email ||
         (Array.isArray(row.emails) ? row.emails[0] : "");
-      const phone = row.effective_phone || row.phone ||
-        (Array.isArray(row.phones) ? row.phones[0] : "");
+      const phones = Array.isArray(row.effective_phones) && row.effective_phones.length
+        ? row.effective_phones : (Array.isArray(row.phones) && row.phones.length
+          ? row.phones : [row.effective_phone || row.phone].filter(Boolean));
       const warnings = row.extraction_warnings;
       const hasWarnings = Array.isArray(warnings)
         ? warnings.length > 0
@@ -267,7 +271,7 @@
           <td>${esc(row.full_name || "—")}
             <div class="import-muted">${esc(row.position || "")}</div></td>
           <td>${esc(email || "—")}</td>
-          <td>${esc(phone || "—")}</td>
+          <td>${phones.length ? phones.map(phone => `<a href="tel:${esc(String(phone).replace(/[^+0-9]/g, ""))}">${esc(phone)}</a>`).join("<br>") : "Телефон не указан"}</td>
           <td>${moneyText(row.revenue_rub)}
             <div class="import-muted">${esc(row.revenue_year || "")}</div></td>
           <td><span class="import-status">${esc(rowStatus(row.import_status))}</span>
@@ -279,6 +283,7 @@
 
     area.innerHTML = `
       ${filters}
+      <p class="import-muted">Список обновляется каждые 20 секунд. При добавлении подтверждённой почты строка исчезнет из «Без email». Фильтр не зависит от выручки. Для нескольких контрагентов в одной строке проверьте принадлежность адреса.</p>
       <div class="import-table-wrap">
         <table class="import-table">
           <thead><tr>
@@ -298,13 +303,13 @@
     $("importRowSegment").value = state.segment;
   }
 
-  async function loadRows() {
+  async function loadRows(background = false) {
     const batch = state.batches.find(
       item => Number(item.id) === Number(state.selectedBatchId)
     );
     if (!batch) return;
 
-    $("importRowsArea").innerHTML =
+    if (!background) $("importRowsArea").innerHTML =
       '<p class="import-muted">Загружаем строки...</p>';
 
     const params = new URLSearchParams({
@@ -318,6 +323,8 @@
       `/api/mailings/imports/${Number(batch.id)}/rows?${params}`
     );
 
+    if (Number(batch.id) !== state.selectedBatchId) return;
+    if (background && (!$("importPreviewPanel").hidden || document.activeElement?.closest("#importRowsArea"))) return;
     const rows = Array.isArray(result.items) ? result.items : [];
     state.rows = rows;
     state.total = Number(result.total || 0);
@@ -715,6 +722,16 @@
   function initialize() {
     if (state.initialized) return;
     state.initialized = true;
+    let refreshingRows = false;
+    setInterval(async () => {
+      if (refreshingRows || document.hidden || $("importsView").hidden ||
+          !state.selectedBatchId || !state.segment.startsWith("without_email") ||
+          !$("importPreviewPanel").hidden || document.activeElement?.closest("#importRowsArea")) return;
+      refreshingRows = true;
+      try { await loadRows(true); } catch { /* Keep current rows; manual refresh reports errors. */ }
+      finally { refreshingRows = false; }
+    }, 20000);
+
 
     $("importFileInput").addEventListener("change", event => {
       setFiles(event.target.files);

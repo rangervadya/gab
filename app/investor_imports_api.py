@@ -291,6 +291,7 @@ def list_import_rows(
         "all",
         "eligible_email",
         "eligible_phone",
+        "without_email", "without_email_phone", "without_email_no_phone",
         "below_threshold",
         "unknown",
     }
@@ -422,6 +423,9 @@ def list_import_rows(
                         AND effective_email IS NULL
                         AND effective_phone IS NOT NULL
                     )
+                    OR (%s = 'without_email' AND effective_email IS NULL)
+                    OR (%s = 'without_email_phone' AND effective_email IS NULL AND effective_phone IS NOT NULL)
+                    OR (%s = 'without_email_no_phone' AND effective_email IS NULL AND effective_phone IS NULL)
                     OR (
                         %s = 'below_threshold'
                         AND revenue_status = 'below_threshold'
@@ -442,7 +446,7 @@ def list_import_rows(
                 batch_id,
                 q.strip(),
                 pattern, pattern, pattern, pattern, pattern, pattern, pattern,
-                segment, segment, segment, segment, segment,
+                segment, segment, segment, segment, segment, segment, segment, segment,
                 limit, offset,
             ],
         ).fetchall()
@@ -530,6 +534,11 @@ def import_flatten(value):
 def collect_import_contacts(record):
     emails = []
     phones = []
+    # An explicit email list (including []) is authoritative. Do not promote
+    # addresses from source URLs, rejected candidates or research notes.
+    explicit_emails = any(re.sub(r"[^0-9a-zа-яё]", "", str(k).lower()) in EMAIL_KEYS for k in record)
+    metadata_keys = {"fieldsources", "publicemailcandidates", "publicemailsarchive",
+                     "extractionwarnings", "warnings", "registrymatching", "checkocoverage"}
 
     def walk(value, context=""):
         if isinstance(value, dict):
@@ -537,6 +546,8 @@ def collect_import_contacts(record):
                 normalized = re.sub(
                     r"[^0-9a-zа-яё]", "", str(key).lower()
                 )
+                if normalized in metadata_keys:
+                    continue
                 next_context = (
                     normalized
                     if normalized in EMAIL_KEYS
@@ -551,8 +562,8 @@ def collect_import_contacts(record):
                 walk(child, context)
 
         elif isinstance(value, str):
-            # Email addresses are detected in every textual field.
-            emails.extend(IMPORT_EMAIL_RE.findall(value))
+            if not explicit_emails or context in EMAIL_KEYS | CONTACT_CONTAINER_KEYS:
+                emails.extend(IMPORT_EMAIL_RE.findall(value))
 
             # Phone extraction is limited to phone/contact fields
             # to avoid treating arbitrary numbers as telephone contacts.
