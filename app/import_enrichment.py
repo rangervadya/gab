@@ -1,5 +1,11 @@
 import json
 import re
+import os
+from datetime import datetime
+from typing import Literal
+from psycopg.types.json import Jsonb
+from app.integration_config import configuration
+from app.import_confirmation import _valid_inn
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -24,13 +30,24 @@ router = APIRouter(
 
 class ImportInnRequest(BaseModel):
     inn: str = Field(min_length=10, max_length=12)
+    provider:Literal['dadata','checko']='checko'
+    version:int|None=None
+    use_revenue:bool=False
+    checked_at:datetime|None=None
+    include_dadata:bool=False
+    dadata_checked_at:datetime|None=None
+
+
+@router.get('/configuration')
+def provider_configuration():
+    return configuration()
 
 
 def get_import_row(import_row_id):
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT id, company_name, inn
+            SELECT id, batch_id, company_name, full_name, inn, edit_version, import_status
             FROM gab_crm_import_rows
             WHERE id = %s
             """,
@@ -39,15 +56,22 @@ def get_import_row(import_row_id):
 
     if not row:
         raise HTTPException(status_code=404, detail="Строка импорта не найдена")
+    if row['import_status'] not in ('pending','needs_review'):raise HTTPException(409,'Обогащать можно только неподтверждённые строки импорта')
 
     return row
+
+
+def assert_source_current(conn,source):
+    row=conn.execute('SELECT import_status,edit_version FROM gab_crm_import_rows WHERE id=%s FOR UPDATE',[source['id']]).fetchone()
+    if not row or row['import_status'] not in ('pending','needs_review') or row['edit_version']!=source['edit_version']:
+        raise HTTPException(409,'Строка изменилась во время запроса; повторите поиск')
 
 
 def save_import_dadata_candidate(conn, import_row_id, item):
     data = item.get("data") or {}
     inn = str(data.get("inn") or "").strip()
 
-    if not inn.isdigit() or len(inn) not in (10, 12):
+    if not _valid_inn(inn):
         return None
 
     raw_type = data.get("type")
@@ -64,6 +88,12 @@ def save_import_dadata_candidate(conn, import_row_id, item):
     address = data.get("address") or {}
     address_data = address.get("data") or {}
     management = data.get("management") or {}
+    def contacts(key):
+        values=data.get(key) or []
+        if not isinstance(values,list):return []
+        return [str(v.get('value') or v.get('unrestricted_value') or '').strip() if isinstance(v,dict) else str(v).strip() for v in values]
+    emails=extract_emails(contacts('emails'))
+    phones=[v for v in contacts('phones') if 7<=len(re.sub(r'\D','',v))<=15]
 
     legal_name = (
         name.get("full_with_opf")
@@ -87,7 +117,7 @@ def save_import_dadata_candidate(conn, import_row_id, item):
         VALUES (
             %s, 'dadata', %s, %s, %s,
             %s, %s, %s, %s,
-            %s, %s, %s, '[]'::jsonb, '[]'::jsonb, 'candidate'
+            %s, %s, %s, %s::jsonb, %s::jsonb, 'candidate'
         )
         ON CONFLICT (import_row_id, provider, inn)
         DO UPDATE SET
@@ -100,11 +130,9 @@ def save_import_dadata_candidate(conn, import_row_id, item):
             legal_address = EXCLUDED.legal_address,
             okved_code = EXCLUDED.okved_code,
             director_name = EXCLUDED.director_name,
-            match_status = CASE
-                WHEN gab_crm_import_enrichment.match_status = 'confirmed'
-                THEN 'confirmed'
-                ELSE 'candidate'
-            END,
+            phones = EXCLUDED.phones,
+            emails = EXCLUDED.emails,
+            match_status = 'candidate',
             checked_at = now(),
             updated_at = now()
         """,
@@ -120,6 +148,7 @@ def save_import_dadata_candidate(conn, import_row_id, item):
             address.get("value"),
             data.get("okved"),
             management.get("name"),
+            json.dumps(phones),json.dumps(emails),
         ],
     )
 
@@ -148,7 +177,7 @@ def search_import_company(import_row_id: int):
         query = source_inn
         variants = [query]
     else:
-        query = clean_search_query(source["company_name"] or "")
+        query = clean_search_query(source["company_name"] or source.get('full_name') or "")
         variants = search_variants(query) if query else []
 
     if not variants:
@@ -160,7 +189,9 @@ def search_import_company(import_row_id: int):
     suggestions = []
     for variant in variants:
         response = dadata_request(variant)
+        if not isinstance(response,dict):raise HTTPException(502,'Некорректный ответ DaData')
         suggestions = response.get("suggestions") or []
+        if not isinstance(suggestions,list) or any(not isinstance(s,dict) or not isinstance(s.get('data'),dict) for s in suggestions):raise HTTPException(502,'Некорректные кандидаты DaData')
         if suggestions:
             break
 
@@ -168,7 +199,10 @@ def search_import_company(import_row_id: int):
     seen_inns = set()
 
     with get_conn() as conn:
-        for suggestion in suggestions:
+        assert_source_current(conn,source)
+        for suggestion in sorted(suggestions,key=lambda s:s['data'].get('branch_type')!='MAIN'):
+            candidate_inn=str(suggestion['data'].get('inn') or '').strip()
+            if candidate_inn in seen_inns:continue
             inn = save_import_dadata_candidate(conn, import_row_id, suggestion)
             if not inn or inn in seen_inns:
                 continue
@@ -186,8 +220,9 @@ def search_import_company(import_row_id: int):
 
     return {
         "import_row_id": import_row_id,
-        "source_name": source["company_name"],
+        "source_name": source["company_name"] or source.get('full_name'),
         "source_inn": source["inn"],
+        "version":source['edit_version'],
         "search_query": query,
         "candidates": candidates,
         "no_matches": len(candidates) == 0,
@@ -196,9 +231,10 @@ def search_import_company(import_row_id: int):
 
 @router.post("/{import_row_id}/checko")
 def enrich_import_company(import_row_id: int, body: ImportInnRequest):
+    source=get_import_row(import_row_id)
     inn = body.inn.strip()
 
-    if not inn.isdigit() or len(inn) not in (10, 12):
+    if not _valid_inn(inn):
         raise HTTPException(status_code=400, detail="Некорректный ИНН")
 
     with get_conn() as conn:
@@ -222,6 +258,9 @@ def enrich_import_company(import_row_id: int, body: ImportInnRequest):
     entity_type = candidate["entity_type"]
     endpoint = "company" if entity_type == "company" else "entrepreneur"
     data = checko_request(endpoint, inn)
+    if not isinstance(data,dict):raise HTTPException(502,'Некорректная карточка Checko')
+    returned_inn=str(data.get('ИНН') or '').strip()
+    if returned_inn and returned_inn!=inn:raise HTTPException(502,'Checko вернул карточку другого ИНН')
 
     contacts = data.get("Контакты") or {}
     if not isinstance(contacts, dict):
@@ -250,7 +289,7 @@ def enrich_import_company(import_row_id: int, body: ImportInnRequest):
         revenue_year, revenue_rub = find_latest_revenue(inn)
 
     ogrn = data.get("ОГРН") or data.get("ОГРНИП")
-    legal_name = (
+    legal_name = text_value(
         data.get("НаимПолн")
         or data.get("НаимСокр")
         or data.get("ФИО")
@@ -265,6 +304,7 @@ def enrich_import_company(import_row_id: int, body: ImportInnRequest):
     okved_name = okved.get("Наим") if isinstance(okved, dict) else None
 
     with get_conn() as conn:
+        assert_source_current(conn,source)
         conn.execute(
             """
             INSERT INTO gab_crm_import_enrichment (
@@ -297,11 +337,7 @@ def enrich_import_company(import_row_id: int, body: ImportInnRequest):
                 website = EXCLUDED.website,
                 revenue_year = EXCLUDED.revenue_year,
                 revenue_rub = EXCLUDED.revenue_rub,
-                match_status = CASE
-                    WHEN gab_crm_import_enrichment.match_status = 'confirmed'
-                    THEN 'confirmed'
-                    ELSE 'candidate'
-                END,
+                match_status = 'candidate',
                 checked_at = now(),
                 updated_at = now()
             """,
@@ -337,27 +373,36 @@ def enrich_import_company(import_row_id: int, body: ImportInnRequest):
 def confirm_import_company(import_row_id: int, body: ImportInnRequest):
     inn = body.inn.strip()
 
-    if not inn.isdigit() or len(inn) not in (10, 12):
+    if not _valid_inn(inn):
         raise HTTPException(status_code=400, detail="Некорректный ИНН")
 
     with get_conn() as conn:
         details = conn.execute(
             """
-            SELECT e.*, r.inn AS source_inn
+            SELECT e.*, r.inn AS source_inn,r.edit_version AS source_version,
+                r.manual_overrides,r.revenue_rub AS row_revenue,r.import_status,r.batch_id
             FROM gab_crm_import_enrichment e
             JOIN gab_crm_import_rows r ON r.id = e.import_row_id
             WHERE e.import_row_id = %s
-              AND e.provider = 'checko'
+              AND e.provider = %s
               AND e.inn = %s
+            FOR UPDATE OF r
             """,
-            [import_row_id, inn],
+            [import_row_id, body.provider,inn],
         ).fetchone()
 
         if not details:
             raise HTTPException(
                 status_code=409,
-                detail="Сначала получите карточку Checko для выбранного ИНН",
+                detail="Сначала получите выбранную карточку реестра",
             )
+        if details['import_status'] not in ('pending','needs_review'):raise HTTPException(409,'Строка уже перенесена или отклонена')
+        if body.version is not None and details['source_version']!=body.version:raise HTTPException(409,'Строка изменилась; повторите поиск и проверку')
+        if body.checked_at is not None and details['checked_at']!=body.checked_at:raise HTTPException(409,'Карточка реестра обновилась; проверьте её заново')
+        if body.include_dadata:
+            extra=get_import_enrichment_row(conn,import_row_id,'dadata',inn)
+            if not extra or body.dadata_checked_at is None or extra['checked_at']!=body.dadata_checked_at:
+                raise HTTPException(409,'Данные DaData обновились; проверьте контакты заново')
 
         source_inn = re.sub(r"\D", "", str(details["source_inn"] or ""))
         if len(source_inn) in (10, 12) and source_inn != inn:
@@ -373,50 +418,60 @@ def confirm_import_company(import_row_id: int, body: ImportInnRequest):
             """
             UPDATE gab_crm_import_enrichment
             SET match_status = CASE
-                    WHEN inn = %s THEN 'confirmed'
-                    ELSE 'rejected'
+                    WHEN inn <> %s THEN 'rejected'
+                    WHEN provider=%s OR (provider='dadata' AND %s) THEN 'confirmed'
+                    ELSE match_status
                 END,
                 updated_at = now()
             WHERE import_row_id = %s
               AND provider IN ('dadata', 'checko')
             """,
-            [inn, import_row_id],
+            [inn,body.provider,body.include_dadata,import_row_id],
         )
 
         revenue = details["revenue_rub"]
         year = details["revenue_year"]
+        manual=details.get('manual_overrides') or {}
+        use_revenue=(details['row_revenue'] is None or body.use_revenue) and not any(k in manual for k in ('revenue_rub','revenue_year','revenue_source'))
+        if not use_revenue:revenue=None;year=None
 
         updated = conn.execute(
             """
             UPDATE gab_crm_import_rows
             SET inn = %s,
+                company_name=CASE WHEN NULLIF(BTRIM(company_name),'') IS NULL
+                    AND NOT (manual_overrides ? 'company_name') THEN %s ELSE company_name END,
+                field_sources=field_sources || jsonb_build_object('inn',%s::text)
+                    || CASE WHEN NULLIF(BTRIM(company_name),'') IS NULL AND %s::text IS NOT NULL
+                        AND NOT (manual_overrides ? 'company_name')
+                        THEN jsonb_build_object('company_name',%s::text) ELSE '{}'::jsonb END,
                 revenue_rub = CASE
-                    WHEN revenue_rub IS NULL AND %s IS NOT NULL
+                    WHEN %s::numeric IS NOT NULL
                     THEN %s ELSE revenue_rub
                 END,
                 revenue_year = CASE
-                    WHEN revenue_rub IS NULL AND %s IS NOT NULL
+                    WHEN %s::numeric IS NOT NULL
                     THEN %s ELSE revenue_year
                 END,
                 revenue_source = CASE
-                    WHEN revenue_rub IS NULL AND %s IS NOT NULL
+                    WHEN %s::numeric IS NOT NULL
                     THEN 'checko' ELSE revenue_source
                 END,
                 revenue_status = CASE
-                    WHEN revenue_rub IS NULL AND %s IS NOT NULL
+                    WHEN %s::numeric IS NOT NULL
                     THEN CASE
                         WHEN %s >= 100000000 THEN 'eligible'
                         ELSE 'below_threshold'
                     END
                     ELSE revenue_status
                 END,
-                updated_at = now()
+                edit_version=edit_version+1,updated_at = now()
             WHERE id = %s
             RETURNING id, inn, revenue_rub, revenue_year,
-                      revenue_source, revenue_status
+                      revenue_source, revenue_status,edit_version
             """,
             [
-                inn,
+                inn,details['legal_name'],body.provider,details['legal_name'],body.provider,
                 revenue, revenue,
                 revenue, year,
                 revenue,
@@ -424,6 +479,8 @@ def confirm_import_company(import_row_id: int, body: ImportInnRequest):
                 import_row_id,
             ],
         ).fetchone()
+        conn.execute("INSERT INTO gab_crm_import_batch_events(batch_id,event_type,actor,detail_json) VALUES (%s,'registry_confirmed',%s,%s)",
+                     [details['batch_id'],os.environ.get('GAB_APP_USER'),Jsonb({'row_id':import_row_id,'inn':inn,'provider':body.provider,'include_dadata':body.include_dadata,'use_revenue':use_revenue})])
 
     return {
         "confirmed": True,

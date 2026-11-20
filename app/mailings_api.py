@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from app.registry_enrichment import router as registry_enrichment_router
 from app.import_enrichment import router as import_enrichment_router
+from app.import_bulk import router as import_bulk_router
 from app.investor_imports_api import router as investor_imports_router
 from app.import_confirmation import router as import_confirmation_router
 
@@ -25,6 +26,7 @@ from app.import_confirmation import router as import_confirmation_router
 router = APIRouter(prefix="/api/mailings", tags=["mailings"])
 router.include_router(registry_enrichment_router)
 router.include_router(import_enrichment_router)
+router.include_router(import_bulk_router)
 router.include_router(investor_imports_router)
 router.include_router(import_confirmation_router)
 

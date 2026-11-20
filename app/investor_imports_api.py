@@ -370,7 +370,7 @@ def list_import_rows(
                           OR jsonb_array_length(COALESCE(r.emails, '[]'::jsonb)) > 0
                             THEN 'file'
                         WHEN jsonb_array_length(COALESCE(e.emails, '[]'::jsonb)) > 0
-                            THEN 'checko'
+                            THEN 'registry'
                         ELSE NULL
                     END AS email_source,
                     CASE
@@ -378,18 +378,21 @@ def list_import_rows(
                           OR jsonb_array_length(COALESCE(r.phones, '[]'::jsonb)) > 0
                             THEN 'file'
                         WHEN jsonb_array_length(COALESCE(e.phones, '[]'::jsonb)) > 0
-                            THEN 'checko'
+                            THEN 'registry'
                         ELSE NULL
                     END AS phone_source
                 FROM gab_crm_import_rows r
                 LEFT JOIN LATERAL (
-                    SELECT x.legal_name, x.emails, x.phones
-                    FROM gab_crm_import_enrichment x
-                    WHERE x.import_row_id = r.id
-                      AND x.provider = 'checko'
-                      AND x.match_status = 'confirmed'
-                    ORDER BY x.checked_at DESC
-                    LIMIT 1
+                    SELECT
+                        (SELECT x.legal_name FROM gab_crm_import_enrichment x
+                         WHERE x.import_row_id=r.id AND x.match_status='confirmed'
+                         ORDER BY (x.provider='checko') DESC,x.checked_at DESC LIMIT 1) AS legal_name,
+                        COALESCE((SELECT jsonb_agg(DISTINCT v.value) FROM gab_crm_import_enrichment x
+                         CROSS JOIN LATERAL jsonb_array_elements_text(x.emails) v(value)
+                         WHERE x.import_row_id=r.id AND x.match_status='confirmed'),'[]'::jsonb) AS emails,
+                        COALESCE((SELECT jsonb_agg(DISTINCT v.value) FROM gab_crm_import_enrichment x
+                         CROSS JOIN LATERAL jsonb_array_elements_text(x.phones) v(value)
+                         WHERE x.import_row_id=r.id AND x.match_status='confirmed'),'[]'::jsonb) AS phones
                 ) e ON TRUE
                 WHERE r.batch_id = %s
             ),
@@ -955,6 +958,10 @@ def edit_import_row(batch_id: int, row_id: int, body: dict):
                VALUES (%s, %s, %s::jsonb)''',
             [row_id, actor, json.dumps(audit, ensure_ascii=False, default=str)],
         )
+        if {'inn','company_name'} & changes.keys():
+            conn.execute("UPDATE gab_crm_import_enrichment SET match_status='needs_review',updated_at=now() WHERE import_row_id=%s AND match_status='confirmed'",[row_id])
+            if row.get('revenue_source')=='checko' and not any(k in updated['manual_overrides'] for k in ('revenue_rub','revenue_year','revenue_source')):
+                updated=conn.execute("UPDATE gab_crm_import_rows SET revenue_rub=NULL,revenue_year=NULL,revenue_source=NULL,revenue_status='unknown',updated_at=now() WHERE id=%s RETURNING *",[row_id]).fetchone()
     return {'item': updated}
 
 

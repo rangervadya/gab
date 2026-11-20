@@ -348,7 +348,7 @@
         <button type="button" class="button secondary" id="importRetryBtn"${batch.status === "failed" ? "" : " hidden"}>Повторить обработку</button>
         <a class="button secondary" target="_blank" rel="noopener"
           href="/api/mailings/imports/${Number(batch.id)}/file">Скачать оригинал</a>
-      </div><div id="importProcessingProgress" class="import-processing-progress" role="status" aria-live="polite">Загружаем состояние…</div>`;
+      </div><div id="importProcessingProgress" class="import-processing-progress" role="status" aria-live="polite">Загружаем состояние…</div><div id="importActionsPanel"></div>`;
 
     const cancel = $("importCancelBtn");
     if (cancel) cancel.addEventListener("click", async () => {
@@ -360,6 +360,7 @@
         await loadBatches(batch.id);
       } catch (error) { notifyImport(error.message,true); cancel.disabled = false; }
     });
+    window.GabImportActions?.mount(batch,loadRows,reasonText);
     await refreshProcessingProgress(batch.id);
     const retry = $("importRetryBtn");
     if (retry) retry.addEventListener("click", async () => {
@@ -400,6 +401,7 @@
         ${data.execution_id ? `<small>Выполнение n8n №${esc(data.execution_id)}</small>` : ""}`;
       const cancel = $("importCancelBtn");
       if (cancel) cancel.hidden = !data.can_cancel;
+      window.GabImportActions?.refreshStatus(batchId,data.status);
       const retry = $("importRetryBtn");
       if (retry) retry.hidden = data.status !== "failed";
       const batch = state.batches.find(b => Number(b.id) === Number(batchId));

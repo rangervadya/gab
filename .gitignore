@@ -249,3 +249,6 @@ n8n-credentials*.json
 *.tar.age
 .ssh/
 deploy.local.json
+
+# Private mounted provider credentials
+**/integrations.private.json

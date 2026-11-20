@@ -1,3 +1,5 @@
+> DaData/Checko и массовый ручной перенос: [IMPORT_CONTACTS_BULK_RU.md](docs/IMPORT_CONTACTS_BULK_RU.md).
+
 > Прогресс загрузки/распознавания и остановка документа: [docs/IMPORT_PROGRESS_RU.md](docs/IMPORT_PROGRESS_RU.md).
 
 > Ручная массовая отправка: установка без писем и порядок запуска сотрудником — [docs/MASS_MAILING_RU.md](docs/MASS_MAILING_RU.md).

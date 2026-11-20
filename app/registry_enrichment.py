@@ -7,6 +7,8 @@ import urllib.parse
 
 from decimal import Decimal, InvalidOperation
 
+from app.integration_config import api_key
+
 import psycopg
 from psycopg.rows import dict_row
 
@@ -123,7 +125,7 @@ def search_variants(query):
 
 
 def dadata_request(query):
-    token = os.environ.get("DADATA_API_KEY")
+    token = api_key("DADATA_API_KEY")
     if not token:
         raise HTTPException(
             status_code=503,
@@ -162,7 +164,7 @@ def dadata_request(query):
 
 
 def checko_request(endpoint, inn):
-    token = os.environ.get("CHECKO_API_KEY")
+    token = api_key("CHECKO_API_KEY")
     if not token:
         raise HTTPException(
             status_code=503,
