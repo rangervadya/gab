@@ -19,3 +19,9 @@ class ProgressEstimateTests(unittest.TestCase):
             self.assertEqual(result['elapsed_seconds'],200)
             row['progress_pages']=[1,2,3,4,5]
             self.assertIsNone(progress_view(row)['stage_eta_seconds'])
+
+            row['progress_pages']=[1,2]
+            row['progress_stage']='llm'
+            row['progress_detail']={'page':3,'completed':1,'total':4}
+            self.assertIsNone(progress_view(row)['stage_eta_seconds'])
+            self.assertEqual(progress_view(row)['fragment']['page'],3)

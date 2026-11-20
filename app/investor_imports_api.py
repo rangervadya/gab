@@ -191,7 +191,7 @@ def claim_import_batch(batch_id: int, body: dict | None = None):
             SET status = 'processing',
                 worker_token = %s,
                 n8n_execution_id = %s, processing_started_at=now(), processing_finished_at=NULL,
-                progress_stage='extract',stage_started_at=now(),progress_total=NULL,progress_pages='[]'::jsonb,
+                progress_stage='extract',progress_detail='{}'::jsonb,stage_started_at=now(),progress_total=NULL,progress_pages='[]'::jsonb,
                 progress_updated_at=now(),cancelled_at=NULL,
                 error_message = NULL,
                 updated_at = now()
@@ -975,7 +975,7 @@ def import_edit_history(batch_id: int, row_id: int):
 def retry_import_batch(batch_id: int):
     with get_conn() as conn:
         row = conn.execute(
-            """UPDATE gab_crm_import_batches SET status='uploaded', worker_token=NULL, error_message=NULL, cancelled_at=NULL,processing_started_at=NULL,processing_finished_at=NULL,progress_stage='queued',progress_pages='[]'::jsonb,progress_total=NULL,progress_updated_at=NULL,updated_at=now()
+            """UPDATE gab_crm_import_batches SET status='uploaded', worker_token=NULL, error_message=NULL, cancelled_at=NULL,processing_started_at=NULL,processing_finished_at=NULL,progress_stage='queued',progress_detail='{}'::jsonb,progress_pages='[]'::jsonb,progress_total=NULL,progress_updated_at=NULL,updated_at=now()
                WHERE id=%s AND status='failed' RETURNING *""", [batch_id],
         ).fetchone()
         if not row:

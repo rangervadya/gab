@@ -27,7 +27,7 @@ from pytesseract import Output
 OLLAMA_LOCK = threading.Lock()
 
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.7"
+APP_VERSION = "0.4.8"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))
@@ -1158,6 +1158,10 @@ def tracked_ollama_chat(body: dict, x_api_key: str | None = Header(default=None,
         for candidate in candidates:
             result=reporter.page_result(page,fingerprint(candidate))
             if result is not None:break
+        if result is None:
+            from ollama_fragments import fragment_plan,extract_fragments
+            plan=fragment_plan(request_body,page)
+            if plan is not None:result=extract_fragments(plan,reporter,page,total)
         if result is None:
             deadline=time.monotonic()+1800
             for attempt,candidate in enumerate(candidates):

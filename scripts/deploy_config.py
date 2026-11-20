@@ -13,7 +13,7 @@ DEFAULTS = {
     'n8n_container': 'ai-stack-n8n_ai-1',
     'n8n_version': '2.42.7',
     'ocr_service': 'gab_ocr',
-    'ocr_version': '0.4.7',
+    'ocr_version': '0.4.8',
     'backup_dir': '/var/backups/gab-invest',
     'state_dir': '/var/lib/gab-invest/deployments',
     'age_identity': '/root/.config/gab-invest/backup.agekey',

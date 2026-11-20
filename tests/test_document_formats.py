@@ -17,6 +17,10 @@ progress_spec=importlib.util.spec_from_file_location('progress', OCR_DIR/'progre
 progress_module=importlib.util.module_from_spec(progress_spec)
 progress_spec.loader.exec_module(progress_module)
 sys.modules['progress']=progress_module
+fragment_spec=importlib.util.spec_from_file_location('ollama_fragments',OCR_DIR/'ollama_fragments.py')
+fragment_module=importlib.util.module_from_spec(fragment_spec)
+fragment_spec.loader.exec_module(fragment_module)
+sys.modules['ollama_fragments']=fragment_module
 
 
 class DocumentTests(unittest.TestCase):
@@ -210,6 +214,36 @@ class DocumentTests(unittest.TestCase):
             response=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
             self.assertEqual(response.status_code,200,response.text)
             opener.assert_not_called()
+
+    def test_workflow_page_uses_fragments_and_resumes_aggregate_cache(self):
+        from unittest.mock import patch,MagicMock
+        import json
+        saved={};calls=[]
+        def cache(page,key,result=None,scope='page'):
+            if result is not None:saved[(scope,key)]=result
+            return saved.get((scope,key))
+        def model(req,**kwargs):
+            body=json.loads(req.data);calls.append(body)
+            self.assertEqual(body['options']['num_ctx'],4096)
+            self.assertEqual(body['options']['num_predict'],2000)
+            self.assertLessEqual(kwargs['timeout'],300)
+            response=MagicMock();response.__enter__.return_value=response
+            response.read.return_value=b'{"done":true,"done_reason":"stop","message":{"content":"{\\"records\\":[]}"}}'
+            return response
+        payload={'batch_id':1,'worker_token':'a'*32,'source_page':7,'pages_total':8,
+                 'ollama_request':{'model':'synthetic','stream':False,'options':{'num_ctx':16384,'num_predict':6000},
+                     'messages':[{'role':'user','content':'Текст страницы с номером: 7\n'+('Synthetic company data\n'*160)}]}}
+        with patch('progress.Reporter.report') as report,patch('progress.Reporter.page_result',side_effect=cache),patch('urllib.request.urlopen',side_effect=model):
+            response=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertGreater(response.json()['_gab_fragment_count'],1)
+            self.assertEqual(response.json()['_gab_source_page'],7)
+            count=len(calls)
+            self.assertGreater(count,1)
+            response=self.client.post('/ollama/chat',headers={'X-API-Key':'synthetic-token'},json=payload)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(len(calls),count)
+            self.assertTrue(any(call.kwargs.get('fragment') for call in report.call_args_list))
 
     def test_bad_json_diagnostics_and_bounded_retry(self):
         from unittest.mock import patch,MagicMock

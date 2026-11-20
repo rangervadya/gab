@@ -341,11 +341,11 @@
         <div>
           <h2>${esc(batch.original_filename || batch.folder_name || "Документ")}</h2>
           <p class="import-muted">
-            ${esc(batchDisplayStatus(batch))} · ${dateText(batch.created_at)}
+            <span id="importBatchStatus">${esc(batchDisplayStatus(batch))}</span> · ${dateText(batch.created_at)}
           </p>
         </div>
-        ${["uploaded","processing"].includes(batch.status) ? `<button type="button" class="button secondary" id="importCancelBtn">Остановить документ</button>` : ""}
-        ${batch.status === "failed" ? `<button type="button" class="button secondary" id="importRetryBtn">Повторить обработку</button>` : ""}
+        <button type="button" class="button secondary" id="importCancelBtn"${["uploaded","processing"].includes(batch.status) ? "" : " hidden"}>Остановить документ</button>
+        <button type="button" class="button secondary" id="importRetryBtn"${batch.status === "failed" ? "" : " hidden"}>Повторить обработку</button>
         <a class="button secondary" target="_blank" rel="noopener"
           href="/api/mailings/imports/${Number(batch.id)}/file">Скачать оригинал</a>
       </div><div id="importProcessingProgress" class="import-processing-progress" role="status" aria-live="polite">Загружаем состояние…</div>`;
@@ -392,16 +392,21 @@
       const measured = data.status === "processing" && data.total;
       area.innerHTML = `<strong>${esc(label)}</strong>
         ${measured ? `<div class="import-stage-progress"><progress max="${Number(data.total)}" value="${Number(data.completed)}"></progress><span>Готово страниц на этапе: ${Number(data.completed)} из ${Number(data.total)} · ${Number(data.percent)}%</span></div>` : ""}
+        ${data.fragment ? `<div>Страница ${Number(data.fragment.page)}: готово фрагментов ${Number(data.fragment.completed)} из ${Number(data.fragment.total)}</div>` : ""}
         ${data.elapsed_seconds !== null ? `<div>Прошло: ${esc(durationText(data.elapsed_seconds))}</div>` : ""}
-        ${data.status === "processing" ? `<div>${data.total && data.completed >= data.total ? "Страницы этого этапа обработаны; ожидаем следующий этап" : data.stage_eta_seconds !== null ? "Примерно осталось на текущем этапе: " + esc(durationText(data.stage_eta_seconds)) : "Оставшееся время пока неизвестно — недостаточно обработанных страниц"}</div><small>OCR и Ollama — разные этапы. Оценка приблизительная и меняется со скоростью обработки.</small>` : ""}
+        ${data.status === "processing" ? `<div>${data.total && data.completed >= data.total ? "Страницы этого этапа обработаны; ожидаем следующий этап" : data.stage_eta_seconds !== null ? "Примерно осталось на текущем этапе: " + esc(durationText(data.stage_eta_seconds)) : "Время до завершения пока неизвестно"}</div><small>OCR и Ollama — разные этапы. Оценка приблизительная и меняется со скоростью обработки.</small>` : ""}
         ${data.cancelled ? "<p>Результаты больше не принимаются. Уже начатый внешний запрос может ещё завершаться.</p>" : ""}
         ${data.error ? `<p class="import-error">${esc(data.error)}</p>` : ""}
         ${data.execution_id ? `<small>Выполнение n8n №${esc(data.execution_id)}</small>` : ""}`;
       const cancel = $("importCancelBtn");
       if (cancel) cancel.hidden = !data.can_cancel;
+      const retry = $("importRetryBtn");
+      if (retry) retry.hidden = data.status !== "failed";
       const batch = state.batches.find(b => Number(b.id) === Number(batchId));
       const changed = batch && batch.status !== data.status;
-      if (batch) { batch.status = data.status; batch.is_cancelled = data.cancelled; renderBatches(); }
+      if (batch) { batch.status = data.status; batch.is_cancelled = data.cancelled; renderBatches();
+        const status = $("importBatchStatus"); if (status) status.textContent = batchDisplayStatus(batch);
+      }
       if (changed && ["review","ready","completed"].includes(data.status)) await loadRows();
       if (["uploaded","processing"].includes(data.status) && !$("importsView").hidden) {
         state.progressTimer = setTimeout(() => refreshProcessingProgress(batchId),3000);

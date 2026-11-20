@@ -22,7 +22,7 @@ class ImportApiTests(unittest.TestCase):
         for path in ['app/schema.sql', 'app/schema_crm.sql', 'app/schema_mailings.sql', 'app/schema_notifications.sql',
                      'migrations/20261116_investor_import.sql', 'migrations/20261115_import_enrichment.sql',
                      'migrations/20261118_contacts_import_audit.sql', 'migrations/20261119_import_editor.sql',
-                     'migrations/20261119_import_editor.sql', 'migrations/20261119_import_progress.sql', 'migrations/20261119_import_page_cache.sql', 'migrations/20261119_import_page_cache.sql']:
+                     'migrations/20261119_import_editor.sql', 'migrations/20261119_import_progress.sql', 'migrations/20261119_import_page_cache.sql', 'migrations/20261119_import_page_cache.sql', 'migrations/20261120_import_fragments.sql', 'migrations/20261120_import_fragments.sql']:
             cls.conn.execute((root / path).read_text())
         os.environ['DATABASE_URL'] = URL
         os.environ['GAB_APP_USER'] = 'synthetic-reviewer'
@@ -111,6 +111,38 @@ class ImportApiTests(unittest.TestCase):
         self.assertEqual(self.conn.execute('SELECT count(*) FROM gab_crm_import_rows WHERE batch_id=%s',[batch]).fetchone()[0],0)
         self.assertEqual(c.post(url+'/cancel').status_code,200)
         self.assertEqual(call({**payload,'result':result},head={'X-GAB-Worker-Token':newtoken}).status_code,409)
+
+    def test_fragment_scope_progress_and_retry_preserve_page_and_fragments(self):
+        c=self.client
+        batch=c.post('/api/mailings/imports',files={'file':('fragments.pdf',b'%PDF-1.4 synthetic','application/pdf')}).json()['item']['id']
+        url=f'/api/mailings/imports/{batch}'
+        token=c.post(url+'/claim').json()['item']['worker_token']
+        headers={'X-GAB-Worker-Token':token}
+        result={'done':True,'message':{'content':'{"records":[]}'}}
+        def cache(data,head=headers):return c.post(url+'/page-result',json=data,headers=head,auth=None)
+        page={'source_page':7,'request_hash':'a'*64,'result':result}
+        self.assertEqual(cache(page).status_code,200)
+        fragment={**page,'scope':'fragment'}
+        self.assertEqual(cache(fragment).status_code,200)
+        self.assertEqual(cache({**fragment,'request_hash':'b'*64}).status_code,200)
+        self.conn.execute((Path(__file__).resolve().parents[1]/'migrations/20261120_import_fragments.sql').read_text())
+        self.assertEqual(self.conn.execute('SELECT count(*) FROM gab_crm_import_page_fragments WHERE batch_id=%s',[batch]).fetchone()[0],2)
+        self.assertEqual(cache({**page,'result':None}).json()['result'],result)
+        self.assertEqual(cache({**fragment,'scope':'fragment;DELETE'}).status_code,422)
+        body={'stage':'llm','total':8,'fragment':{'page':7,'completed':1,'total':3}}
+        response=c.post(url+'/progress',headers=headers,auth=None,json=body)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(c.get(url+'/progress').json()['fragment'],body['fragment'])
+        bad={**body,'fragment':{'page':7,'completed':4,'total':3}}
+        self.assertEqual(c.post(url+'/progress',headers=headers,auth=None,json=bad).status_code,422)
+        self.assertEqual(c.post(url+'/cancel').status_code,200)
+        self.assertEqual(cache(fragment).status_code,409)
+        self.assertEqual(c.post(url+'/retry').status_code,200)
+        newtoken=c.post(url+'/claim').json()['item']['worker_token']
+        self.assertIsNone(c.get(url+'/progress').json()['fragment'])
+        self.assertEqual(cache({**fragment,'result':None},head={'X-GAB-Worker-Token':newtoken}).json()['result'],result)
+        self.assertEqual(cache({**fragment,'result':None}).status_code,409)
+        self.assertEqual(c.post(url+'/cancel').status_code,200)
 
     def test_manual_confirmation_is_idempotent(self):
         c = self.client

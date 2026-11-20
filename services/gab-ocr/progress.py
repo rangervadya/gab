@@ -11,9 +11,9 @@ class Reporter:
         self.batch_id=batch_id if isinstance(batch_id,int) and batch_id>0 else None
         self.token=token if isinstance(token,str) and len(token)==32 else None
 
-    def page_result(self,page,request_hash,result=None):
+    def page_result(self,page,request_hash,result=None,scope='page'):
         request=urllib.request.Request(f'http://gab-review:8000/api/mailings/imports/{self.batch_id}/page-result',
-            data=json.dumps({'source_page':page,'request_hash':request_hash,'result':result}).encode(),
+            data=json.dumps({'source_page':page,'request_hash':request_hash,'result':result,'scope':scope}).encode(),
             headers={'Content-Type':'application/json','X-GAB-Worker-Token':self.token},method='POST')
         try:
             with urllib.request.urlopen(request,timeout=10) as response:
@@ -24,10 +24,10 @@ class Reporter:
         except (OSError,ValueError,KeyError):
             raise HTTPException(503,'Хранилище результатов страниц временно недоступно') from None
 
-    def report(self,stage,total,page_completed=None,require_active=False):
+    def report(self,stage,total,page_completed=None,require_active=False,fragment=None):
         if not self.batch_id or not self.token:return
         request=urllib.request.Request(f'http://gab-review:8000/api/mailings/imports/{self.batch_id}/progress',
-            data=json.dumps({'stage':stage,'total':total,'page_completed':page_completed}).encode(),
+            data=json.dumps({'stage':stage,'total':total,'page_completed':page_completed,'fragment':fragment}).encode(),
             headers={'Content-Type':'application/json','X-GAB-Worker-Token':self.token},method='POST')
         try:
             with urllib.request.urlopen(request,timeout=3) as response:response.read(1000)
