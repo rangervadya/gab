@@ -68,6 +68,9 @@ class RecipientSelection(BaseModel):
 
 
 class RecipientsUpdate(BaseModel):
+    # Existing, separately prepared draft recipients. These do not create CRM
+    # investor cards and must belong to this same campaign.
+    prepared_recipient_ids: list[int] = Field(default_factory=list, max_length=5000)
     # New format: one selected email per investor.
     recipients: list[RecipientSelection] = Field(
         default_factory=list, max_length=5000
@@ -406,9 +409,22 @@ def save_recipients(mailing_id: int, body: RecipientsUpdate):
     with get_conn() as conn:
         check_mailing(conn, mailing_id)
 
+        prepared_ids = list(dict.fromkeys(body.prepared_recipient_ids))
+        if prepared_ids:
+            prepared = conn.execute(
+                """SELECT id FROM gab_crm_mailing_recipients
+                   WHERE mailing_id = %s AND id = ANY(%s)
+                     AND investor_id IS NULL AND review_record_id IS NULL
+                     AND status = 'pending' AND delivery_state = 'pending'
+                   FOR UPDATE""",
+                [mailing_id, prepared_ids],
+            ).fetchall()
+            if {row['id'] for row in prepared} != set(prepared_ids):
+                raise HTTPException(422, 'Подготовленные получатели изменились или принадлежат другой рассылке')
+
         conn.execute(
-            "DELETE FROM gab_crm_mailing_recipients WHERE mailing_id = %s",
-            [mailing_id]
+            "DELETE FROM gab_crm_mailing_recipients WHERE mailing_id = %s AND NOT (id = ANY(%s))",
+            [mailing_id, prepared_ids]
         )
 
         if body.recipients and ids:

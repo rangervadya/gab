@@ -4,6 +4,8 @@ let currentId = null;
 let campaignItems = [];
 let recipientItems = [];
 let selectedRecipients = new Map();
+let preparedRecipientItems = [];
+let selectedPreparedRecipientIds = new Set();
 let registryRecipientItems = [];
 let selectedRegistryRecordIds = new Set();
 let enrichmentResults = [];
@@ -108,6 +110,11 @@ async function openMailing(id) {
   $("mailingText").value = m.body_text || "";
   attachmentItems = data.attachments || [];
   selectedRecipients = new Map();
+  preparedRecipientItems = (data.recipients || []).filter(
+    r => r.investor_id === null && r.review_record_id === null && r.email
+  );
+  selectedPreparedRecipientIds = new Set(preparedRecipientItems.map(r => Number(r.id)));
+  renderPreparedRecipients();
   for (const r of (data.recipients || [])) {
     if (r.investor_id !== null && r.email) {
       const email = String(r.email).trim();
@@ -151,6 +158,18 @@ function renderAttachments() {
       </div>
     `).join("")
     : '<p class="hint">Вложений пока нет</p>';
+}
+
+function renderPreparedRecipients() {
+  $("preparedRecipientsPanel").hidden = !preparedRecipientItems.length;
+  $("preparedRecipientCount").textContent = `${selectedPreparedRecipientIds.size} выбрано`;
+  $("preparedRecipientList").innerHTML = preparedRecipientItems.map(r => `
+    <label class="recipient-row">
+      <input type="checkbox" data-prepared-recipient="${Number(r.id)}"
+        ${selectedPreparedRecipientIds.has(Number(r.id)) ? "checked" : ""}
+        ${campaignLocked ? "disabled" : ""}>
+      <span><strong>${htmlEscape(r.recipient_name)}</strong><br>${htmlEscape(r.email)}</span>
+    </label>`).join("");
 }
 
 async function saveMailing() {
@@ -520,6 +539,7 @@ async function saveRecipients() {
     method: "POST",
     body: JSON.stringify({
       recipients: [...selectedRecipients.values()],
+      prepared_recipient_ids: [...selectedPreparedRecipientIds],
       review_record_ids: [...selectedRegistryRecordIds]
     })
   });
@@ -550,6 +570,16 @@ $("emptyNewMailing").addEventListener("click", () => createMailing().catch(e => 
 $("campaignList").addEventListener("click", event => {
   const button = event.target.closest("[data-campaign]");
   if (button) openMailing(Number(button.dataset.campaign)).catch(e => toast(e.message));
+});
+$("preparedRecipientList").addEventListener("change", event => {
+  if (campaignLocked) return;
+  const input = event.target.closest("[data-prepared-recipient]");
+  if (!input) return;
+  const id = Number(input.dataset.preparedRecipient);
+  if (input.checked) selectedPreparedRecipientIds.add(id);
+  else selectedPreparedRecipientIds.delete(id);
+  invalidateBulkPlan();
+  renderPreparedRecipients();
 });
 
 $("saveMailing").addEventListener("click", () => saveMailing().catch(e => toast(e.message)));
@@ -775,7 +805,7 @@ function setCampaignLocked(locked) {
     "attachmentInput", "saveRecipients", "saveRegistryRecipients", "sendTestMail", "bulkPreviewBtn", "selectVisibleCrm", "clearCrmSelection"]) {
     $(id).disabled = locked;
   }
-  document.querySelectorAll('[data-delete-attachment], [data-investor], [data-review-record]').forEach(el => { el.disabled = locked; });
+  document.querySelectorAll('[data-delete-attachment], [data-investor], [data-review-record], [data-prepared-recipient]').forEach(el => { el.disabled = locked; });
 }
 
 async function refreshBulkStatus() {

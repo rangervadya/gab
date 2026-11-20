@@ -69,6 +69,41 @@ class BulkMailingTests(unittest.TestCase):
             sender.assert_not_called()
         self.assertIsNone(self.admin.execute('SELECT bulk_run_id FROM gab_crm_mailings WHERE id=%s',[m]).fetchone()[0])
 
+    def test_prepared_recipients_survive_save_and_preview(self):
+        m,url=self.campaign()
+        self.admin.execute('UPDATE gab_crm_mailing_recipients SET investor_id=NULL WHERE mailing_id=%s',[m])
+        ids=[r[0] for r in self.admin.execute('SELECT id FROM gab_crm_mailing_recipients WHERE mailing_id=%s ORDER BY id',[m]).fetchall()]
+        investors=self.admin.execute('SELECT count(*) FROM gab_crm_investors').fetchone()[0]
+        with patch.object(self.bulk,'send_one') as sender:
+            saved=self.client.post(url+'/recipients',json={'prepared_recipient_ids':ids+[ids[0]]})
+            self.assertEqual(saved.status_code,200,saved.text)
+            self.assertEqual(saved.json()['with_email'],2)
+            preview=self.client.post(url+'/bulk-preview')
+            self.assertEqual(preview.status_code,200,preview.text)
+            self.assertEqual(preview.json()['count'],2)
+            sender.assert_not_called()
+        self.assertEqual(self.admin.execute('SELECT count(*) FROM gab_crm_investors').fetchone()[0],investors)
+        self.assertEqual([r[0] for r in self.admin.execute('SELECT id FROM gab_crm_mailing_recipients WHERE mailing_id=%s ORDER BY id',[m]).fetchall()],ids)
+        removed=self.client.post(url+'/recipients',json={'prepared_recipient_ids':ids[1:]})
+        self.assertEqual(removed.json()['selected'],1)
+
+    def test_prepared_recipient_from_another_campaign_is_rejected(self):
+        m,url=self.campaign();other,other_url=self.campaign()
+        self.admin.execute('UPDATE gab_crm_mailing_recipients SET investor_id=NULL')
+        foreign=self.admin.execute('SELECT id FROM gab_crm_mailing_recipients WHERE mailing_id=%s LIMIT 1',[other]).fetchone()[0]
+        rejected=self.client.post(url+'/recipients',json={'prepared_recipient_ids':[foreign]})
+        self.assertEqual(rejected.status_code,422,rejected.text)
+        self.assertEqual(self.admin.execute('SELECT count(*) FROM gab_crm_mailing_recipients WHERE mailing_id=%s',[m]).fetchone()[0],2)
+        self.assertEqual(self.admin.execute('SELECT count(*) FROM gab_crm_mailing_recipients WHERE mailing_id=%s',[other]).fetchone()[0],2)
+
+    def test_prepared_sent_recipient_cannot_be_requeued(self):
+        m,url=self.campaign()
+        self.admin.execute("UPDATE gab_crm_mailing_recipients SET investor_id=NULL,delivery_state='sent' WHERE mailing_id=%s",[m])
+        row=self.admin.execute('SELECT id FROM gab_crm_mailing_recipients WHERE mailing_id=%s LIMIT 1',[m]).fetchone()[0]
+        rejected=self.client.post(url+'/recipients',json={'prepared_recipient_ids':[row]})
+        self.assertEqual(rejected.status_code,422,rejected.text)
+        self.assertEqual(self.admin.execute('SELECT count(*) FROM gab_crm_mailing_recipients WHERE mailing_id=%s',[m]).fetchone()[0],2)
+
     def test_only_manual_confirmation_and_no_duplicate_launch(self):
         m,url=self.campaign();plan=self.client.post(url+'/bulk-preview').json()
         self.assertEqual(self.client.post(url+'/bulk-send',json={'preview_hash':plan['preview_hash']}).status_code,422)
