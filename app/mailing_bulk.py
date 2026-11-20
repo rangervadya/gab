@@ -19,11 +19,12 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 from app.registry_enrichment import get_conn
+from app.mailing_payload import MAX_ATTACHMENTS_BYTES, encode_payload, validate_planned_payload
 
 router=APIRouter(prefix='/api/mailings',tags=['bulk-mailings'])
 LOCK="hashtextextended('gab-manual-mailing-dispatch', 0)"
 EMAIL=re.compile(r'[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+')
-MAX_ATTACHMENTS=8*1024*1024
+MAX_ATTACHMENTS=MAX_ATTACHMENTS_BYTES
 
 
 class Launch(BaseModel):
@@ -53,7 +54,7 @@ def attachments_payload(items,encode=False):
     from app.mailings_api import STORAGE_DIR
     total=sum(int(item['size_bytes']) for item in items)
     if total>MAX_ATTACHMENTS:
-        raise HTTPException(422,'Общий размер вложений превышает лимит почтового workflow — 8 МиБ')
+        raise HTTPException(422,'Общий размер вложений превышает лимит почтового workflow — 12 МиБ')
     result=[]
     for item in items:
         path=(STORAGE_DIR/str(item['mailing_id'])/item['storage_filename']).resolve()
@@ -96,6 +97,10 @@ def plan(conn,mailing_id):
             seen.add(email)
             eligible.append({'id':row['id'],'email':email,'name':row['recipient_name']})
     if len(eligible)>5000:raise HTTPException(422,'Не более 5000 адресов за один запуск')
+    try:
+        validate_planned_payload(mailing_id,mailing['subject'],mailing['body_html'],mailing['body_text'],attachments,[r['email'] for r in eligible])
+    except ValueError as exc:
+        raise HTTPException(422,str(exc)) from exc
     frozen={'subject':mailing['subject'],'body_html':mailing['body_html'],'body_text':mailing['body_text'],
             'attachments':attachments,'recipients':eligible}
     digest=hashlib.sha256(json.dumps(frozen,sort_keys=True,default=str,ensure_ascii=False).encode()).hexdigest()
@@ -149,7 +154,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def send_one(payload):
     url,token=transport_settings()
-    request=urllib.request.Request(url,data=json.dumps(payload,ensure_ascii=False).encode(),method='POST',
+    request=urllib.request.Request(url,data=encode_payload(payload),method='POST',
         headers={'Content-Type':'application/json','X-GAB-Webhook-Token':token})
     with urllib.request.build_opener(NoRedirect).open(request,timeout=90) as response:
         if not 200<=response.status<300:raise ValueError('Unconfirmed HTTP status')

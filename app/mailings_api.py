@@ -21,6 +21,7 @@ from app.import_enrichment import router as import_enrichment_router
 from app.import_bulk import router as import_bulk_router
 from app.investor_imports_api import router as investor_imports_router
 from app.import_confirmation import router as import_confirmation_router
+from app.mailing_payload import MAX_ATTACHMENTS_BYTES, encode_payload
 
 
 router = APIRouter(prefix="/api/mailings", tags=["mailings"])
@@ -36,7 +37,7 @@ STORAGE_DIR = Path(
 )
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
-MAX_TEST_ATTACHMENTS_TOTAL = 8 * 1024 * 1024
+MAX_TEST_ATTACHMENTS_TOTAL = MAX_ATTACHMENTS_BYTES
 
 WEBHOOK_URL = os.environ.get("GAB_MAILING_WEBHOOK_URL", "")
 WEBHOOK_TOKEN = os.environ.get("GAB_MAILING_WEBHOOK_TOKEN", "")
@@ -821,7 +822,7 @@ def send_test_email(mailing_id: int, body: TestSendRequest):
     if total_bytes > MAX_TEST_ATTACHMENTS_TOTAL:
         raise HTTPException(
             status_code=413,
-            detail="Для тестового письма общий размер вложений не должен превышать 8 МБ"
+            detail="Для тестового письма общий размер вложений не должен превышать 12 МиБ"
         )
 
     encoded_attachments = []
@@ -859,9 +860,14 @@ def send_test_email(mailing_id: int, body: TestSendRequest):
         "attachments": encoded_attachments
     }
 
+    try:
+        encoded_payload = encode_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
     request = urllib.request.Request(
         WEBHOOK_URL,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        data=encoded_payload,
         headers={
             "Content-Type": "application/json",
             "X-GAB-Webhook-Token": WEBHOOK_TOKEN
