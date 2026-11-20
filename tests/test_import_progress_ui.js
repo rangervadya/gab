@@ -7,7 +7,7 @@ const elements=new Map();
 const element=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',textContent:'',hidden:false});return elements.get(id)};
 const document={getElementById:element};
 let response={status:'processing',stage:'llm',batch_id:8,total:8,completed:6,percent:75,
- fragment:{page:7,completed:2,total:5},elapsed_seconds:120,stage_eta_seconds:null,can_cancel:true,error:null};
+ fragment:{page:7,completed:2,total:5,part:'2.1'},elapsed_seconds:120,stage_eta_seconds:null,can_cancel:true,error:null};
 const window={};
 vm.runInNewContext(source,{document,window,console,fetch:async()=>({ok:true,json:async()=>response}),setTimeout:()=>0,clearTimeout:()=>{}});
 const {state,refreshProcessingProgress}=window.testProgress;
@@ -15,6 +15,7 @@ state.selectedBatchId=8;state.batches=[{id:8,status:'uploaded',original_filename
 (async()=>{
  await refreshProcessingProgress(8);
  assert.ok(element('importProcessingProgress').innerHTML.includes('готово фрагментов 2 из 5'));
+ assert.ok(element('importProcessingProgress').innerHTML.includes('часть 2.1'));
  assert.equal(element('importBatchStatus').textContent,'Обрабатывается');
  assert.equal(element('importCancelBtn').hidden,false);
  assert.equal(element('importRetryBtn').hidden,true);

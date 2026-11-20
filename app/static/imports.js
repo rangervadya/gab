@@ -393,7 +393,7 @@
       const measured = data.status === "processing" && data.total;
       area.innerHTML = `<strong>${esc(label)}</strong>
         ${measured ? `<div class="import-stage-progress"><progress max="${Number(data.total)}" value="${Number(data.completed)}"></progress><span>Готово страниц на этапе: ${Number(data.completed)} из ${Number(data.total)} · ${Number(data.percent)}%</span></div>` : ""}
-        ${data.fragment ? `<div>Страница ${Number(data.fragment.page)}: готово фрагментов ${Number(data.fragment.completed)} из ${Number(data.fragment.total)}</div>` : ""}
+        ${data.fragment ? `<div>Страница ${Number(data.fragment.page)}: готово фрагментов ${Number(data.fragment.completed)} из ${Number(data.fragment.total)}${data.fragment.part ? " · часть " + esc(data.fragment.part) : ""}</div>` : ""}
         ${data.elapsed_seconds !== null ? `<div>Прошло: ${esc(durationText(data.elapsed_seconds))}</div>` : ""}
         ${data.status === "processing" ? `<div>${data.total && data.completed >= data.total ? "Страницы этого этапа обработаны; ожидаем следующий этап" : data.stage_eta_seconds !== null ? "Примерно осталось на текущем этапе: " + esc(durationText(data.stage_eta_seconds)) : "Время до завершения пока неизвестно"}</div><small>OCR и Ollama — разные этапы. Оценка приблизительная и меняется со скоростью обработки.</small>` : ""}
         ${data.cancelled ? "<p>Результаты больше не принимаются. Уже начатый внешний запрос может ещё завершаться.</p>" : ""}

@@ -22,7 +22,7 @@ class ImportApiTests(unittest.TestCase):
         for path in ['app/schema.sql', 'app/schema_crm.sql', 'app/schema_mailings.sql', 'app/schema_notifications.sql',
                      'migrations/20261116_investor_import.sql', 'migrations/20261115_import_enrichment.sql',
                      'migrations/20261118_contacts_import_audit.sql', 'migrations/20261119_import_editor.sql',
-                     'migrations/20261119_import_editor.sql', 'migrations/20261119_import_progress.sql', 'migrations/20261119_import_page_cache.sql', 'migrations/20261119_import_page_cache.sql', 'migrations/20261120_import_fragments.sql', 'migrations/20261120_import_fragments.sql']:
+                     'migrations/20261119_import_editor.sql', 'migrations/20261119_import_progress.sql', 'migrations/20261119_import_page_cache.sql', 'migrations/20261119_import_page_cache.sql', 'migrations/20261120_import_fragments.sql', 'migrations/20261120_import_fragments.sql','migrations/20261120_import_adaptive_splits.sql','migrations/20261120_import_adaptive_splits.sql']:
             cls.conn.execute((root / path).read_text())
         os.environ['DATABASE_URL'] = URL
         os.environ['GAB_APP_USER'] = 'synthetic-reviewer'
@@ -125,6 +125,14 @@ class ImportApiTests(unittest.TestCase):
         fragment={**page,'scope':'fragment'}
         self.assertEqual(cache(fragment).status_code,200)
         self.assertEqual(cache({**fragment,'request_hash':'b'*64}).status_code,200)
+        plan={'version':1,'children':['c'*64,'d'*64]}
+        split={**fragment,'scope':'split','result':plan}
+        self.assertEqual(cache(split).status_code,200)
+        self.assertEqual(cache({**split,'result':None}).json()['result'],plan)
+        self.assertEqual(cache({**split,'result':result}).status_code,422)
+        self.assertEqual(cache({**split,'result':{**plan,'partial_text':'not allowed'}}).status_code,422)
+        self.conn.execute((Path(__file__).resolve().parents[1]/'migrations/20261120_import_adaptive_splits.sql').read_text())
+        self.assertEqual(cache({**split,'result':None}).json()['result'],plan)
         self.conn.execute((Path(__file__).resolve().parents[1]/'migrations/20261120_import_fragments.sql').read_text())
         self.assertEqual(self.conn.execute('SELECT count(*) FROM gab_crm_import_page_fragments WHERE batch_id=%s',[batch]).fetchone()[0],2)
         self.assertEqual(cache({**page,'result':None}).json()['result'],result)
@@ -133,6 +141,10 @@ class ImportApiTests(unittest.TestCase):
         response=c.post(url+'/progress',headers=headers,auth=None,json=body)
         self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(c.get(url+'/progress').json()['fragment'],body['fragment'])
+        part={**body,'fragment':{**body['fragment'],'part':'2.1'}}
+        self.assertEqual(c.post(url+'/progress',headers=headers,auth=None,json=part).status_code,200)
+        self.assertEqual(c.get(url+'/progress').json()['fragment']['part'],'2.1')
+        self.assertEqual(c.post(url+'/progress',headers=headers,auth=None,json={**body,'fragment':{**body['fragment'],'part':'<bad>'}}).status_code,422)
         bad={**body,'fragment':{'page':7,'completed':4,'total':3}}
         self.assertEqual(c.post(url+'/progress',headers=headers,auth=None,json=bad).status_code,422)
         self.assertEqual(c.post(url+'/cancel').status_code,200)
@@ -141,6 +153,8 @@ class ImportApiTests(unittest.TestCase):
         newtoken=c.post(url+'/claim').json()['item']['worker_token']
         self.assertIsNone(c.get(url+'/progress').json()['fragment'])
         self.assertEqual(cache({**fragment,'result':None},head={'X-GAB-Worker-Token':newtoken}).json()['result'],result)
+        self.assertEqual(cache({**split,'result':None},head={'X-GAB-Worker-Token':newtoken}).json()['result'],plan)
+        self.assertEqual(cache(split).status_code,409)
         self.assertEqual(cache({**fragment,'result':None}).status_code,409)
         self.assertEqual(c.post(url+'/cancel').status_code,200)
 

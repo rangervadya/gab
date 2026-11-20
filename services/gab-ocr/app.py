@@ -27,7 +27,7 @@ from pytesseract import Output
 OLLAMA_LOCK = threading.Lock()
 
 APP_NAME = "GAB local OCR"
-APP_VERSION = "0.4.8"
+APP_VERSION = "0.4.9"
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "100"))
 OCR_API_TOKEN = os.getenv("OCR_API_TOKEN", "")
 OCR_SCALE = float(os.getenv("OCR_SCALE", "2.5"))

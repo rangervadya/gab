@@ -23,7 +23,7 @@ class ImportIntegrationTests(unittest.TestCase):
         for name in ['app/schema.sql','app/schema_crm.sql','app/schema_mailings.sql','app/schema_notifications.sql',
                      'migrations/20261116_investor_import.sql','migrations/20261115_import_enrichment.sql',
                      'migrations/20261118_contacts_import_audit.sql','migrations/20261119_import_editor.sql',
-                     'migrations/20261119_import_progress.sql','migrations/20261119_import_page_cache.sql','migrations/20261120_import_fragments.sql']:
+                     'migrations/20261119_import_progress.sql','migrations/20261119_import_page_cache.sql','migrations/20261120_import_fragments.sql','migrations/20261120_import_adaptive_splits.sql']:
             cls.admin.execute((root/name).read_text())
         os.environ.update(DATABASE_URL=URL,GAB_APP_USER='synthetic-reviewer',GAB_APP_PASSWORD='synthetic-test-password')
         from app.main import app

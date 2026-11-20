@@ -4,6 +4,7 @@ import hmac
 import json
 import math
 import os
+import re
 from typing import Literal
 from fastapi import APIRouter,Header,HTTPException
 from pydantic import BaseModel,Field
@@ -17,6 +18,7 @@ class FragmentProgress(BaseModel):
     page:int=Field(ge=1,le=200)
     completed:int=Field(ge=0,le=32)
     total:int=Field(ge=1,le=32)
+    part:str|None=Field(default=None,max_length=40,pattern=r'^[1-9][0-9]?(?:\.[12]){0,3}$')
 
 
 class PageProgress(BaseModel):
@@ -30,13 +32,15 @@ class PageResult(BaseModel):
     source_page:int=Field(ge=1,le=200)
     request_hash:str=Field(pattern=r'^[a-f0-9]{64}$')
     result:dict|None=None
-    scope:Literal['page','fragment']='page'
+    scope:Literal['page','fragment','split']='page'
 
 
 @router.post('/{batch_id}/page-result')
 def page_result(batch_id:int,body:PageResult,x_gab_worker_token:str=Header(min_length=32,max_length=128)):
     # The batch row lock fences cancellation/retry against both cache reads and
     # writes. Results survive retry, but are reusable only for identical input.
+    table={'page':'gab_crm_import_page_results','fragment':'gab_crm_import_page_fragments',
+           'split':'gab_crm_import_fragment_splits'}[body.scope]
     with get_conn() as conn:
         row=conn.execute('SELECT status,worker_token FROM gab_crm_import_batches WHERE id=%s FOR UPDATE',[batch_id]).fetchone()
         if not row or row['status']!='processing' or not hmac.compare_digest(str(row.get('worker_token') or ''),x_gab_worker_token):
@@ -44,20 +48,23 @@ def page_result(batch_id:int,body:PageResult,x_gab_worker_token:str=Header(min_l
         if body.result is not None:
             if len(json.dumps(body.result).encode())>5*1024*1024:
                 raise HTTPException(413,'Ответ страницы слишком большой')
-            try:
-                content=body.result['message']['content']
-                parsed=json.loads(content)
-                if body.result.get('done') is not True or body.result.get('done_reason')=='length' or not isinstance(parsed.get('records'),list) or any(not isinstance(record,dict) for record in parsed['records']):
-                    raise ValueError()
-            except (KeyError,TypeError,ValueError,AttributeError):
-                raise HTTPException(422,'Страница не содержит завершённый JSON records') from None
-            table='gab_crm_import_page_fragments' if body.scope=='fragment' else 'gab_crm_import_page_results'
-            conflict='batch_id,source_page,request_hash' if body.scope=='fragment' else 'batch_id,source_page'
+            if body.scope=='split':
+                plan=body.result;children=plan.get('children')
+                if set(plan)!={'version','children'} or type(plan.get('version')) is not int or plan['version']!=1 or not isinstance(children,list) or len(children)!=2 or any(not isinstance(v,str) or not re.fullmatch('[a-f0-9]{64}',v) for v in children):
+                    raise HTTPException(422,'План деления должен содержать только версию и два hash дочерних частей')
+            else:
+                try:
+                    content=body.result['message']['content']
+                    parsed=json.loads(content)
+                    if body.result.get('done') is not True or body.result.get('done_reason')=='length' or not isinstance(parsed.get('records'),list) or any(not isinstance(record,dict) for record in parsed['records']):
+                        raise ValueError()
+                except (KeyError,TypeError,ValueError,AttributeError):
+                    raise HTTPException(422,'Страница не содержит завершённый JSON records') from None
+            conflict='batch_id,source_page' if body.scope=='page' else 'batch_id,source_page,request_hash'
             conn.execute(f'''INSERT INTO {table}(batch_id,source_page,request_hash,result_json)
                 VALUES (%s,%s,%s,%s) ON CONFLICT({conflict}) DO UPDATE SET
                 request_hash=excluded.request_hash,result_json=excluded.result_json,created_at=now()''',
                 [batch_id,body.source_page,body.request_hash,Jsonb(body.result)])
-        table='gab_crm_import_page_fragments' if body.scope=='fragment' else 'gab_crm_import_page_results'
         cached=conn.execute(f'SELECT result_json FROM {table} WHERE batch_id=%s AND source_page=%s AND request_hash=%s',
                            [batch_id,body.source_page,body.request_hash]).fetchone()
     return {'result':cached['result_json'] if cached else None}
@@ -126,7 +133,7 @@ def report_progress(batch_id:int,body:PageProgress,x_gab_worker_token:str=Header
         pages=set() if changed else set(row.get('progress_pages') or [])
         if not changed and row.get('progress_total') not in (None,body.total):raise HTTPException(409,'Число страниц изменилось')
         if body.page_completed:pages.add(body.page_completed)
-        detail=body.fragment.model_dump() if body.fragment else ({} if changed else row.get('progress_detail') or {})
+        detail=body.fragment.model_dump(exclude_none=True) if body.fragment else ({} if changed else row.get('progress_detail') or {})
         updated=conn.execute('''UPDATE gab_crm_import_batches SET progress_stage=%s,progress_total=%s,progress_pages=%s,
             stage_started_at=CASE WHEN %s OR stage_started_at IS NULL THEN now() ELSE stage_started_at END,
             progress_detail=%s,progress_updated_at=now(),updated_at=now() WHERE id=%s RETURNING *''',
