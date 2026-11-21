@@ -6,6 +6,8 @@ let recipientItems = [];
 let selectedRecipients = new Map();
 let preparedRecipientItems = [];
 let selectedPreparedRecipientIds = new Set();
+let recipientScope = "all";
+let audienceSaving = false;
 let registryRecipientItems = [];
 let selectedRegistryRecordIds = new Set();
 let enrichmentResults = [];
@@ -101,6 +103,8 @@ async function openMailing(id) {
   const data = await api(`/api/mailings/${id}`);
   const m = data.mailing;
   currentId = id;
+  recipientScope = m.recipient_scope || "all";
+  audienceSaving = false;
   invalidateBulkPlan();
   clearTimeout(bulkTimer);
   showRecipientFolders("projects");
@@ -162,14 +166,50 @@ function renderAttachments() {
 
 function renderPreparedRecipients() {
   $("preparedRecipientsPanel").hidden = !preparedRecipientItems.length;
-  $("preparedRecipientCount").textContent = `${selectedPreparedRecipientIds.size} выбрано`;
-  $("preparedRecipientList").innerHTML = preparedRecipientItems.map(r => `
+  const qualified = preparedRecipientItems.filter(r => r.revenue_segment_eligible === true);
+  const visible = recipientScope === "revenue_100m" ? qualified : preparedRecipientItems;
+  const selected = visible.filter(r => selectedPreparedRecipientIds.has(Number(r.id))).length;
+  $("preparedRecipientCount").textContent = `${selected} выбрано`;
+  $("preparedScopeAll").textContent = `Все получатели (${preparedRecipientItems.length})`;
+  $("preparedScopeRevenue").textContent = `Компании с выручкой от 100 млн ₽ (${qualified.length})`;
+  for (const [id, scope] of [["preparedScopeAll", "all"], ["preparedScopeRevenue", "revenue_100m"]]) {
+    $(id).setAttribute("aria-pressed", String(scope === recipientScope));
+    $(id).className = "button " + (scope === recipientScope ? "primary" : "secondary");
+    $(id).disabled = campaignLocked || audienceSaving;
+  }
+  $("folderRevenueScope").disabled = campaignLocked || audienceSaving;
+  $("preparedScopeHint").textContent = recipientScope === "revenue_100m"
+    ? `Для отправки выбраны только компании с подтверждённой выручкой от 100 млн ₽. Общий список из ${preparedRecipientItems.length} адресов сохранён. Неизвестная выручка и неподтверждённые совпадения в эту группу не входят.`
+    : "Выбрана общая группа получателей. Выручка подтверждена не у всех компаний.";
+  $("preparedRecipientList").innerHTML = visible.length ? visible.map(r => `
     <label class="recipient-row">
       <input type="checkbox" data-prepared-recipient="${Number(r.id)}"
         ${selectedPreparedRecipientIds.has(Number(r.id)) ? "checked" : ""}
         ${campaignLocked ? "disabled" : ""}>
-      <span><strong>${htmlEscape(r.recipient_name)}</strong><br>${htmlEscape(r.email)}</span>
-    </label>`).join("");
+      <span><strong>${htmlEscape(r.recipient_name)}</strong><br>${htmlEscape(r.email)}
+      ${r.company_revenue ? `<br><small>Выручка: ${r.company_revenue.approximate ? "≈ " : ""}${Number(r.company_revenue.amount_rub).toLocaleString("ru-RU")} ₽ за ${Number(r.company_revenue.year)} год</small>` : ""}</span>
+    </label>`).join("") : '<p class="hint">В этой группе пока нет получателей с подтверждённой выручкой.</p>';
+}
+
+async function setRecipientScope(scope) {
+  const id = currentId;
+  if (!id || campaignLocked || audienceSaving) return;
+  audienceSaving = true;
+  invalidateBulkPlan();
+  renderPreparedRecipients();
+  $("bulkPreviewBtn").disabled = true;
+  try {
+    const result = await api(`/api/mailings/${id}/audience`, {
+      method: "PATCH", body: JSON.stringify({recipient_scope: scope})
+    });
+    if (id === currentId) recipientScope = result.recipient_scope;
+  } finally {
+    if (id === currentId) {
+      audienceSaving = false;
+      renderPreparedRecipients();
+      $("bulkPreviewBtn").disabled = campaignLocked;
+    }
+  }
 }
 
 async function saveMailing() {
@@ -581,6 +621,8 @@ $("preparedRecipientList").addEventListener("change", event => {
   invalidateBulkPlan();
   renderPreparedRecipients();
 });
+$("preparedScopeAll").addEventListener("click", () => setRecipientScope("all").catch(e => toast(e.message)));
+$("preparedScopeRevenue").addEventListener("click", () => setRecipientScope("revenue_100m").catch(e => toast(e.message)));
 
 $("saveMailing").addEventListener("click", () => saveMailing().catch(e => toast(e.message)));
 $("previewMailing").addEventListener("click", previewMailing);
@@ -663,6 +705,8 @@ $("recipientFolderHome").addEventListener("click", event => {
     showRecipientFolders("projects");
   } else if (action === "open-source") {
     openRecipientSource(button.dataset.source);
+  } else if (action === "revenue-group") {
+    setRecipientScope("revenue_100m").then(() => $("preparedRecipientsPanel").scrollIntoView({behavior:"smooth",block:"start"})).catch(e => toast(e.message));
   }
 });
 
@@ -802,7 +846,7 @@ function invalidateBulkPlan() {
 function setCampaignLocked(locked) {
   campaignLocked = locked;
   for (const id of ["mailingName", "mailingSubject", "mailingHtml", "mailingText", "saveMailing",
-    "attachmentInput", "saveRecipients", "saveRegistryRecipients", "sendTestMail", "bulkPreviewBtn", "selectVisibleCrm", "clearCrmSelection"]) {
+    "attachmentInput", "saveRecipients", "saveRegistryRecipients", "sendTestMail", "bulkPreviewBtn", "selectVisibleCrm", "clearCrmSelection", "preparedScopeAll", "preparedScopeRevenue", "folderRevenueScope"]) {
     $(id).disabled = locked;
   }
   document.querySelectorAll('[data-delete-attachment], [data-investor], [data-review-record], [data-prepared-recipient]').forEach(el => { el.disabled = locked; });
@@ -852,7 +896,7 @@ async function refreshBulkStatus() {
 
 $("bulkPreviewBtn").addEventListener("click", async () => {
   const id = currentId;
-  if (!id || campaignLocked) return;
+  if (!id || campaignLocked || audienceSaving) return;
   const button = $("bulkPreviewBtn");
   button.disabled = true;
   try {
@@ -864,6 +908,7 @@ $("bulkPreviewBtn").addEventListener("click", async () => {
     $("bulkPreview").hidden = false;
     $("bulkPreview").innerHTML = `
       <h3>Проверка перед отправкой</h3>
+      <p><strong>Группа:</strong> ${plan.recipient_scope === "revenue_100m" ? "Только компании с выручкой от 100 млн ₽" : "Все выбранные получатели"}</p>
       <p><strong>Тема:</strong> ${htmlEscape(plan.subject)}</p>
       <iframe class="bulk-message-preview" sandbox="" title="Письмо получателям"></iframe>
       <p>Вложения: ${plan.attachments.map(a => `${htmlEscape(a.filename)} (${(a.size_bytes/1024/1024).toFixed(2)} МиБ)`).join(", ") || "нет"}.</p>

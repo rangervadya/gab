@@ -7,6 +7,7 @@ import re
 import uuid
 import hashlib
 import mimetypes
+from typing import Literal
 
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from app.import_bulk import router as import_bulk_router
 from app.investor_imports_api import router as investor_imports_router
 from app.import_confirmation import router as import_confirmation_router
 from app.mailing_payload import MAX_ATTACHMENTS_BYTES, encode_payload
+from app.mailing_audience import decorate_recipient
 
 
 router = APIRouter(prefix="/api/mailings", tags=["mailings"])
@@ -83,6 +85,10 @@ class RecipientsUpdate(BaseModel):
 
 class TestSendRequest(BaseModel):
     to_email: str = Field(min_length=3, max_length=254)
+
+
+class AudienceUpdate(BaseModel):
+    recipient_scope: Literal['all', 'revenue_100m']
 
 
 def get_conn():
@@ -343,8 +349,9 @@ def get_mailing(mailing_id: int):
         recipients = conn.execute(
             """
             SELECT id, investor_id, company_id, contact_id, review_record_id,
-                   recipient_name, email, status, error_message
-            FROM gab_crm_mailing_recipients
+                   recipient_name, email, status, error_message,
+                   COALESCE(to_jsonb(r)->'revenue_evidence', '{}'::jsonb) AS revenue_evidence
+            FROM gab_crm_mailing_recipients r
             WHERE mailing_id = %s
             ORDER BY id
             """,
@@ -365,9 +372,18 @@ def get_mailing(mailing_id: int):
     return {
         "mailing": mailing,
         "attachments": attachments,
-        "recipients": recipients,
+        "recipients": [decorate_recipient(r) for r in recipients],
         "events": events
     }
+
+
+@router.patch("/{mailing_id}/audience")
+def update_audience(mailing_id: int, body: AudienceUpdate):
+    with get_conn() as conn:
+        check_mailing(conn, mailing_id)
+        conn.execute("UPDATE gab_crm_mailings SET recipient_scope=%s, updated_at=now() WHERE id=%s",
+                     [body.recipient_scope, mailing_id])
+    return {"recipient_scope": body.recipient_scope}
 
 
 @router.patch("/{mailing_id}")

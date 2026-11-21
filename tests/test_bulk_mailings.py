@@ -21,7 +21,8 @@ class BulkMailingTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         for name in ['app/schema.sql','app/schema_crm.sql','app/schema_mailings.sql',
                      'migrations/20261116_investor_import.sql','migrations/20261118_contacts_import_audit.sql',
-                     'migrations/20261119_bulk_mailing.sql','migrations/20261119_bulk_mailing.sql']:
+                     'migrations/20261119_bulk_mailing.sql','migrations/20261119_bulk_mailing.sql',
+                     'migrations/20261121_mailing_audience.sql','migrations/20261121_mailing_audience.sql']:
             cls.admin.execute((root/name).read_text())
         os.environ['DATABASE_URL']=URL
         os.environ['GAB_APP_USER']='synthetic-reviewer'
@@ -86,6 +87,64 @@ class BulkMailingTests(unittest.TestCase):
         self.assertEqual([r[0] for r in self.admin.execute('SELECT id FROM gab_crm_mailing_recipients WHERE mailing_id=%s ORDER BY id',[m]).fetchall()],ids)
         removed=self.client.post(url+'/recipients',json={'prepared_recipient_ids':ids[1:]})
         self.assertEqual(removed.json()['selected'],1)
+
+    def test_revenue_group_filters_on_server_and_keeps_other_recipients(self):
+        from psycopg.types.json import Jsonb
+        m,url=self.campaign()
+        rows=self.admin.execute('SELECT id FROM gab_crm_mailing_recipients WHERE mailing_id=%s ORDER BY id',[m]).fetchall()
+        proof={'inn':'1234567890','entity_type':'company','identity_confirmed':True,
+               'status_code':'001','year':2025,'amount_rub':100000000,'source_url':'https://example.test/financials'}
+        self.admin.execute('UPDATE gab_crm_mailing_recipients SET revenue_evidence=%s WHERE id=%s',[Jsonb(proof),rows[0][0]])
+        self.assertEqual(self.client.patch(url+'/audience',json={'recipient_scope':'revenue_100m'}).status_code,200)
+        with patch.object(self.bulk,'send_one') as sender:
+            selected=self.client.post(url+'/bulk-preview').json()
+            self.assertEqual(selected['count'],1)
+            self.assertEqual(selected['recipients'][0]['email'],'person0@example.test')
+            self.assertEqual(selected['recipient_scope'],'revenue_100m')
+            sender.assert_not_called()
+        self.assertEqual(self.admin.execute('SELECT count(*) FROM gab_crm_mailing_recipients WHERE mailing_id=%s',[m]).fetchone()[0],2)
+        detail=self.client.get(url).json()
+        self.assertTrue(detail['recipients'][0]['revenue_segment_eligible'])
+        self.assertFalse(detail['recipients'][1]['revenue_segment_eligible'])
+        # A stale preview may not dispatch after switching back to the full list.
+        self.client.patch(url+'/audience',json={'recipient_scope':'all'})
+        with patch.object(self.bulk,'send_one') as sender:
+            stale=self.client.post(url+'/bulk-send',json={'confirm':True,'preview_hash':selected['preview_hash']})
+            self.assertEqual(stale.status_code,409)
+            sender.assert_not_called()
+        self.assertEqual(self.client.post(url+'/bulk-preview').json()['count'],2)
+        before=self.admin.execute('SELECT to_jsonb(r) FROM gab_crm_mailing_recipients r WHERE mailing_id=%s ORDER BY id',[m]).fetchall()
+        self.admin.execute((Path(__file__).resolve().parents[1]/'migrations/20261121_mailing_audience.sql').read_text())
+        self.assertEqual(before,self.admin.execute('SELECT to_jsonb(r) FROM gab_crm_mailing_recipients r WHERE mailing_id=%s ORDER BY id',[m]).fetchall())
+
+    def test_unknown_and_unconfirmed_revenue_do_not_fall_back_to_all(self):
+        from psycopg.types.json import Jsonb
+        m,url=self.campaign()
+        self.admin.execute('UPDATE gab_crm_mailing_recipients SET revenue_evidence=%s WHERE mailing_id=%s',
+            [Jsonb({'inn':'1234567890','entity_type':'company','identity_confirmed':False,'status_code':'001',
+                    'year':2025,'amount_rub':900000000,'source_url':'https://example.test/financials'}),m])
+        self.client.patch(url+'/audience',json={'recipient_scope':'revenue_100m'})
+        plan=self.client.post(url+'/bulk-preview').json()
+        self.assertEqual(plan['count'],0)
+        self.assertFalse(plan['can_send'])
+        self.assertEqual(self.client.patch(url+'/audience',json={'recipient_scope':'typo'}).status_code,422)
+
+    def test_revenue_group_only_dispatches_qualified_recipient_with_mock_delivery(self):
+        from psycopg.types.json import Jsonb
+        m,url=self.campaign()
+        self.admin.execute("UPDATE gab_crm_mailing_recipients SET revenue_evidence=%s WHERE mailing_id=%s AND email='person0@example.test'",
+            [Jsonb({'inn':'1234567890','entity_type':'company','identity_confirmed':True,'status_code':'001',
+                    'year':2025,'amount_rub':120000000,'source_url':'https://example.test/financials'}),m])
+        self.client.patch(url+'/audience',json={'recipient_scope':'revenue_100m'})
+        plan=self.client.post(url+'/bulk-preview').json()
+        with patch.object(self.bulk,'send_one',return_value='synthetic-only') as sender:
+            result=self.client.post(url+'/bulk-send',json={'confirm':True,'preview_hash':plan['preview_hash']})
+            self.assertEqual(result.status_code,200,result.text)
+            sender.assert_called_once()
+            self.assertEqual(sender.call_args.args[0]['to_email'],'person0@example.test')
+        pending=self.admin.execute("SELECT delivery_state FROM gab_crm_mailing_recipients WHERE mailing_id=%s AND email='person1@example.test'",[m]).fetchone()[0]
+        self.assertEqual(pending,'pending')
+        self.assertEqual(self.client.patch(url+'/audience',json={'recipient_scope':'all'}).status_code,409)
 
     def test_prepared_recipient_from_another_campaign_is_rejected(self):
         m,url=self.campaign();other,other_url=self.campaign()

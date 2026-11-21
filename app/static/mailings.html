@@ -147,22 +147,27 @@
               <span class="recipient-folder-arrow">›</span>
             </button>
 
-            <div class="recipient-folder-card folder-coming-soon">
+            <button type="button" class="recipient-folder-card" id="folderRevenueScope" data-folder-action="revenue-group">
               <span class="recipient-folder-icon">📂</span>
               <span class="recipient-folder-info">
                 <strong>Целевые компании от 100 млн ₽</strong>
-                <small>Отдельная база — подключим следующим этапом</small>
+                <small>Компании с подтверждённой выручкой из этого черновика</small>
               </span>
-            </div>
+            </button>
           </div>
         </section>
 
         <section class="panel recipients-panel" id="preparedRecipientsPanel" hidden>
           <div class="panel-heading">
-            <h2>Получатели из проверенного списка</h2>
+            <h2>Получатели черновика</h2>
             <span class="count-label" id="preparedRecipientCount">0 выбрано</span>
           </div>
-          <p class="hint">Снимите отметку с адресов, которые нужно исключить. Перед отправкой список будет показан ещё раз.</p>
+          <div class="recipient-toolbar">
+            <button type="button" class="button secondary" id="preparedScopeAll">Все получатели</button>
+            <button type="button" class="button secondary" id="preparedScopeRevenue">Компании с выручкой от 100 млн ₽</button>
+          </div>
+          <p class="hint" id="preparedScopeHint"></p>
+          <p class="hint">Переключение группы сохраняет общий список. Снятие отдельной отметки исключит адрес при сохранении получателей.</p>
           <div id="preparedRecipientList" class="recipient-list"></div>
         </section>
 
@@ -318,6 +323,6 @@
 </main>
 
 <div id="mailToast" class="mail-toast" role="status"></div>
-<script src="/static/mailings.js"></script>
+<script src="/static/mailings.js?v=20261121-revenue"></script>
 </body>
 </html>

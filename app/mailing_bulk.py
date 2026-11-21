@@ -20,6 +20,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 from app.registry_enrichment import get_conn
 from app.mailing_payload import MAX_ATTACHMENTS_BYTES, encode_payload, validate_planned_payload
+from app.mailing_audience import SCOPES, in_scope, revenue_details
 
 router=APIRouter(prefix='/api/mailings',tags=['bulk-mailings'])
 LOCK="hashtextextended('gab-manual-mailing-dispatch', 0)"
@@ -84,6 +85,8 @@ def plan(conn,mailing_id):
     rows=conn.execute('SELECT * FROM gab_crm_mailing_recipients WHERE mailing_id=%s ORDER BY id FOR UPDATE',[mailing_id]).fetchall()
     opted_out={r['email'] for r in conn.execute("SELECT DISTINCT lower(btrim(email)) AS email FROM gab_crm_mailing_recipients WHERE status='opted_out' AND email IS NOT NULL").fetchall()}
     eligible=[];excluded=[];seen=set()
+    scope=mailing.get('recipient_scope','all')
+    if scope not in SCOPES:raise HTTPException(422,'Неизвестная группа получателей')
     for row in rows:
         email=(row['email'] or '').strip().lower()
         reason=None
@@ -91,17 +94,20 @@ def plan(conn,mailing_id):
         elif not EMAIL.fullmatch(email):reason='Некорректный email'
         elif email in opted_out:reason='Отказ от рассылок'
         elif row['status']!='pending' or row['delivery_state']!='pending':reason='Адрес уже обрабатывался'
+        elif not in_scope(row,scope):reason='Нет подтверждённой выручки компании от 100 млн ₽'
         elif email in seen:reason='Повторяющийся email'
         if reason:excluded.append({'id':row['id'],'email':email,'reason':reason})
         else:
             seen.add(email)
-            eligible.append({'id':row['id'],'email':email,'name':row['recipient_name']})
+            selected={'id':row['id'],'email':email,'name':row['recipient_name']}
+            if scope=='revenue_100m':selected['company_revenue']=revenue_details(row)
+            eligible.append(selected)
     if len(eligible)>5000:raise HTTPException(422,'Не более 5000 адресов за один запуск')
     try:
         validate_planned_payload(mailing_id,mailing['subject'],mailing['body_html'],mailing['body_text'],attachments,[r['email'] for r in eligible])
     except ValueError as exc:
         raise HTTPException(422,str(exc)) from exc
-    frozen={'subject':mailing['subject'],'body_html':mailing['body_html'],'body_text':mailing['body_text'],
+    frozen={'recipient_scope':scope,'subject':mailing['subject'],'body_html':mailing['body_html'],'body_text':mailing['body_text'],
             'attachments':attachments,'recipients':eligible}
     digest=hashlib.sha256(json.dumps(frozen,sort_keys=True,default=str,ensure_ascii=False).encode()).hexdigest()
     return mailing,frozen,excluded,digest
@@ -111,7 +117,7 @@ def plan(conn,mailing_id):
 def preview(mailing_id:int):
     with get_conn() as conn:
         mailing,frozen,excluded,digest=plan(conn,mailing_id)
-    return {'mailing_id':mailing_id,'preview_hash':digest,'subject':frozen['subject'],
+    return {'mailing_id':mailing_id,'preview_hash':digest,'recipient_scope':frozen['recipient_scope'],'subject':frozen['subject'],
             'body_html':frozen['body_html'],'body_text':frozen['body_text'],
             'recipients':frozen['recipients'],'count':len(frozen['recipients']),
             'excluded':excluded,'attachments':[{'filename':a['original_filename'],'size_bytes':a['size_bytes']} for a in frozen['attachments']],
